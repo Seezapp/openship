@@ -100,7 +100,7 @@ export class BullMQJobRunner implements JobRunner {
         const cb = this.recurringCallbacks.get(jobId);
         if (!cb) {
           // Stale schedule — onTick was unregistered before the tick.
-          // Removing the BullMQ repeatable would be ideal but the
+          // Removing the BullMQ job scheduler would be ideal but the
           // worker only sees the job; the caller's removeRecurring
           // handles it on the next sync.
           return;
@@ -153,34 +153,19 @@ export class BullMQJobRunner implements JobRunner {
     if (!this.recurringQueue) throw new Error("BullMQJobRunner not started");
     this.recurringCallbacks.set(opts.jobId, opts.onTick);
 
-    // Remove any existing repeatable with the same jobId so cron edits
-    // take effect. BullMQ keys repeatables by `pattern + jobId`; we
-    // iterate to find a match.
-    const repeatables = await this.recurringQueue.getRepeatableJobs();
-    for (const r of repeatables) {
-      if (r.id === opts.jobId) {
-        await this.recurringQueue.removeRepeatableByKey(r.key);
-      }
-    }
-
-    await this.recurringQueue.add(
+    // Upsert keyed by jobId, so a cron edit replaces the previous schedule
+    // in place rather than leaving the old pattern firing alongside it.
+    await this.recurringQueue.upsertJobScheduler(
       opts.jobId,
-      { jobId: opts.jobId },
-      {
-        jobId: opts.jobId,
-        repeat: { pattern: opts.cronExpression },
-        attempts: 1,
-      },
+      { pattern: opts.cronExpression },
+      { name: opts.jobId, data: { jobId: opts.jobId }, opts: { attempts: 1 } },
     );
   }
 
   async removeRecurring(jobId: string): Promise<void> {
     this.recurringCallbacks.delete(jobId);
     if (!this.recurringQueue) return;
-    const repeatables = await this.recurringQueue.getRepeatableJobs();
-    for (const r of repeatables) {
-      if (r.id === jobId) await this.recurringQueue.removeRepeatableByKey(r.key);
-    }
+    await this.recurringQueue.removeJobScheduler(jobId);
   }
 
   describe(): string {

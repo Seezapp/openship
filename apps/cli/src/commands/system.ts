@@ -11,6 +11,7 @@ import { Command } from "commander";
 import type { UpdateInstanceSettingsInput } from "@repo/sdk";
 import ora, { type Ora } from "ora";
 import { readFileSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { getRemoteClient, getShipClient, ApiError } from "../lib/ship-client";
@@ -476,7 +477,7 @@ dataTransferCommand
 
       let file: unknown;
       try {
-        file = JSON.parse(readFileSync(opts.file, "utf8"));
+        file = JSON.parse(readFileSync(resolve(opts.file), "utf8"));
       } catch {
         err(`\n  Could not read or parse ${opts.file}.\n`);
         exitCommand(1);

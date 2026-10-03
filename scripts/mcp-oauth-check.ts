@@ -40,7 +40,32 @@ function parseArgs(argv: string[]): Args {
     );
     process.exit(2);
   }
-  return { base, email, password };
+  return { base: operatorOrigin(base), email, password };
+}
+
+/**
+ * Every request this script makes targets the instance the operator named, so
+ * pin it down once: an absolute http(s) URL with no embedded credentials.
+ * Anything else (file:, a typo'd scheme, user:pass@host) is refused before the
+ * first fetch — the operator login would otherwise be posted to it.
+ */
+function operatorOrigin(base: string): string {
+  let url: URL;
+  try {
+    url = new URL(base);
+  } catch {
+    console.error(`--base must be an absolute URL, got: ${base}`);
+    process.exit(2);
+  }
+  if ((url.protocol !== "https:" && url.protocol !== "http:") || url.username || url.password) {
+    console.error(`--base must be a plain http(s) URL, got: ${base}`);
+    process.exit(2);
+  }
+  if (url.search || url.hash) {
+    console.error(`--base must not carry a query or fragment, got: ${base}`);
+    process.exit(2);
+  }
+  return base;
 }
 
 /* ---------- tiny assertion harness ---------- */
@@ -281,7 +306,8 @@ async function callInitialize(base: string, path: string, accessToken: string): 
 
 async function checkDiscovery(base: string, canonical: string): Promise<void> {
   section("1. Path-aware protected resource metadata (RFC 9728)");
-  const res = await fetch(`${base}/.well-known/oauth-protected-resource/api/mcp`);
+  // Discovery documents are served by the instance itself; a redirect elsewhere is a failure, not a hop to follow.
+  const res = await fetch(`${base}/.well-known/oauth-protected-resource/api/mcp`, { redirect: "error" });
   const body = (await res.json()) as { resource?: string; authorization_servers?: string[] };
   check("returns 200", res.status === 200, { status: res.status });
   check("resource is the MCP URL including its path", body.resource === canonical, {
@@ -293,7 +319,9 @@ async function checkDiscovery(base: string, canonical: string): Promise<void> {
     authorization_servers: body.authorization_servers,
   });
 
-  const proxied = await fetch(`${base}/.well-known/oauth-protected-resource/api/proxy/api/mcp`);
+  const proxied = await fetch(`${base}/.well-known/oauth-protected-resource/api/proxy/api/mcp`, {
+    redirect: "error",
+  });
   const proxiedBody = (await proxied.json()) as { resource?: string };
   check("the /api/proxy alias has its own document", proxied.status === 200, {
     status: proxied.status,

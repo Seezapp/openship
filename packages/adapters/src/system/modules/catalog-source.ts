@@ -100,11 +100,34 @@ export function loadEmbeddedCatalog(module: string): CatalogLoadResult {
   return verifyAndBuild(module, manifest, sig, assets, "embedded");
 }
 
-async function fetchBytes(url: string): Promise<Buffer | null> {
+/**
+ * Resolve `relPath` under the pinned catalog directory and refuse anything that
+ * lands elsewhere. `module` and asset keys come from callers and from a manifest
+ * that is not verified yet, so a `..` segment, an absolute URL or a `//host`
+ * must not be able to steer the fetch to another host or outside the catalog.
+ */
+export function catalogUrl(module: string, relPath: string): URL {
+  const base = new URL(`${CATALOG_BASE_URL.replace(/\/+$/, "")}/`);
+  if (base.protocol !== "https:" && base.protocol !== "http:") {
+    throw new Error(`catalog base URL must be http(s): ${base.protocol}`);
+  }
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(module)) {
+    throw new Error(`invalid module name: ${module}`);
+  }
+  const root = new URL(`${CATALOG_REF}/modules/${module}/`, base);
+  const url = new URL(root.href + relPath);
+  if (url.origin !== base.origin || !url.pathname.startsWith(root.pathname) || url.username || url.password) {
+    throw new Error(`catalog path escapes the pinned catalog: ${relPath}`);
+  }
+  return url;
+}
+
+async function fetchBytes(url: URL): Promise<Buffer | null> {
   // Retry a couple of times like downloadTarballOnRemote; a 404 is "not there".
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      const res = await fetch(url);
+      // The pinned host serves these directly; a redirect would leave it.
+      const res = await fetch(url.href, { redirect: "error" });
       if (res.status === 404) return null;
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return Buffer.from(await res.arrayBuffer());
@@ -117,10 +140,9 @@ async function fetchBytes(url: string): Promise<Buffer | null> {
 
 /** Fetch + verify the pinned remote catalog for `module`, if reachable. */
 export async function fetchRemoteCatalog(module: string): Promise<CatalogLoadResult> {
-  const dir = `${CATALOG_BASE_URL}/${CATALOG_REF}/modules/${module}`;
   const [manifest, sig] = await Promise.all([
-    fetchBytes(`${dir}/catalog.json`),
-    fetchBytes(`${dir}/catalog.json.sig`).catch(() => null),
+    fetchBytes(catalogUrl(module, "catalog.json")),
+    fetchBytes(catalogUrl(module, "catalog.json.sig")).catch(() => null),
   ]);
   if (!manifest) return {}; // not published remotely
   // Parse first (unverified) only to learn which assets to fetch; the real trust
@@ -137,7 +159,7 @@ export async function fetchRemoteCatalog(module: string): Promise<CatalogLoadRes
   if (shapeError) return { error: `remote manifest invalid: ${shapeError}` };
   const assets = new Map<string, Buffer>();
   for (const key of referencedAssets(parsed)) {
-    const b = await fetchBytes(`${dir}/${key}`);
+    const b = await fetchBytes(catalogUrl(module, key));
     if (b) assets.set(key, b);
   }
   return verifyAndBuild(module, manifest, sig ?? Buffer.alloc(0), assets, `${CATALOG_REF}`);

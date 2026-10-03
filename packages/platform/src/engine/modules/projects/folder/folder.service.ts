@@ -22,6 +22,7 @@ import { mkdir, mkdtemp, rename, rm, stat } from "node:fs/promises";
 import { createWriteStream } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { resolveWithin } from "@repo/core/safe-path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeWebReadableStream } from "node:stream/web";
@@ -268,8 +269,8 @@ export async function acceptRelayUpload(
   }
 
   const temporary = await mkdtemp(join(dirname(session.stagingDir), "openship-transfer-"));
-  const archivePath = join(temporary, "source.tar.gz");
-  const extracted = join(temporary, "source");
+  const archivePath = resolveWithin(temporary, "source.tar.gz");
+  const extracted = resolveWithin(temporary, "source");
   try {
     await streamToFile(body, archivePath);
     await mkdir(extracted, { mode: 0o700 });

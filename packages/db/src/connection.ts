@@ -1,6 +1,7 @@
 import { mkdirSync, existsSync, readFileSync, unlinkSync } from "fs";
 import { resolve, dirname, join } from "path";
 import { fileURLToPath } from "url";
+import { normalizeLocalPath, resolveWithin } from "@repo/core/safe-path";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { PgliteDatabase } from "drizzle-orm/pglite";
 import type { Pool } from "pg";
@@ -149,7 +150,7 @@ export async function createDatabase(input: DatabaseOptions): Promise<DatabaseCo
    * internal bookkeeping so the WASM cluster starts.)
    */
   function clearStalePgliteControlFile(dataDir: string): void {
-    const controlPath = join(dataDir, "postmaster.pid");
+    const controlPath = resolveWithin(dataDir, "postmaster.pid");
     if (!existsSync(controlPath)) return;
     try {
       unlinkSync(controlPath);
@@ -198,7 +199,7 @@ export async function createDatabase(input: DatabaseOptions): Promise<DatabaseCo
       else await migrate(db, { migrationsFolder: MIGRATIONS_DIR });
       return db;
     }
-    const dataDir = resolve(options.dataDir!);
+    const dataDir = normalizeLocalPath(options.dataDir!);
     if (!existsSync(dataDir)) {
       mkdirSync(dataDir, { recursive: true });
     }

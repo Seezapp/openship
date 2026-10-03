@@ -2,6 +2,7 @@
 import { lstat, mkdir, mkdtemp, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { createWriteStream, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { resolveWithin } from "@repo/core/safe-path";
 import { tmpdir } from "node:os";
 import { pipeline } from "node:stream/promises";
 import { create as createTar } from "tar";
@@ -91,7 +92,7 @@ export async function prepareSourceDirectory(source: CodeSource, options: { temp
   if (entries) {
     const root = options.temporaryRoot ?? tmpdir();
     await mkdir(root, { recursive: true, mode: 0o700 });
-    directory = await mkdtemp(join(root, "openship-source-"));
+    directory = await mkdtemp(resolveWithin(root, "openship-source-"));
     temporary = true;
   } else {
     directory = resolve((source as { path: string }).path);
@@ -101,7 +102,7 @@ export async function prepareSourceDirectory(source: CodeSource, options: { temp
   try {
     for (const [path, data] of entries ?? []) {
       options.signal?.throwIfAborted();
-      const target = join(directory, path);
+      const target = resolveWithin(directory, path);
       await mkdir(dirname(target), { recursive: true, mode: 0o700 });
       await writeFile(target, data, { flag: "wx", mode: 0o600 });
     }

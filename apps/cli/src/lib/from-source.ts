@@ -20,6 +20,8 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 
+import { resolveWithin } from "@repo/core/safe-path";
+
 import { OS_DIR } from "./paths";
 
 export { OS_DIR };
@@ -79,9 +81,9 @@ export function shortSha(cwd: string): string {
 
 export function isMonorepo(dir: string): boolean {
   return (
-    existsSync(join(dir, "package.json")) &&
-    existsSync(join(dir, "apps/api/package.json")) &&
-    existsSync(join(dir, "apps/dashboard/package.json"))
+    existsSync(resolveWithin(dir, "package.json")) &&
+    existsSync(resolveWithin(dir, "apps/api/package.json")) &&
+    existsSync(resolveWithin(dir, "apps/dashboard/package.json"))
   );
 }
 

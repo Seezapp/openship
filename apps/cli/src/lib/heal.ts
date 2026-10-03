@@ -29,6 +29,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 
+import { resolveWithin } from "@repo/core/safe-path";
+
 import { DATA_DIR } from "./paths";
 
 /** The embedded DB directory: `PGLITE_DATA_DIR` (with `~` expansion) else
@@ -55,8 +57,8 @@ function stamp(): string {
 function copyDirRecursive(src: string, dest: string): void {
   if (!existsSync(dest)) mkdirSync(dest, { recursive: true });
   for (const entry of readdirSync(src)) {
-    const s = join(src, entry);
-    const d = join(dest, entry);
+    const s = resolveWithin(src, entry);
+    const d = resolveWithin(dest, entry);
     if (statSync(s).isDirectory()) copyDirRecursive(s, d);
     else copyFileSync(s, d);
   }
@@ -99,11 +101,11 @@ export function healDataDir(dataDir = resolveDataDir()): HealResult {
   if (existsSync(walDir)) {
     const segments = readdirSync(walDir)
       .filter((name) => /^[0-9A-F]{24}$/.test(name))
-      .map((name) => ({ name, mtime: statSync(join(walDir, name)).mtimeMs }))
+      .map((name) => ({ name, mtime: statSync(resolveWithin(walDir, name)).mtimeMs }))
       .sort((a, b) => b.mtime - a.mtime);
     if (segments.length > 0) {
       const newest = segments[0];
-      unlinkSync(join(walDir, newest.name));
+      unlinkSync(resolveWithin(walDir, newest.name));
       result.trimmedWalSegment = newest.name;
     }
   }

@@ -1,7 +1,7 @@
 /** Public assembly only. Product implementations remain in their owning workspaces. */
 import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "tsup";
 
@@ -31,6 +31,7 @@ if (!process.argv.includes("--check")) {
         baseUrl: root,
         paths: {
           ...Object.fromEntries(["sdk", "platform", "contracts", "core"].map(name => [`@repo/${name}`, [`packages/${name}/src/index.ts`]])),
+          "@repo/core/safe-path": ["packages/core/src/safe-path.ts"],
           "@repo/platform/native": ["packages/platform/src/native-host.ts"],
           "@repo/platform/source-files": ["packages/platform/src/source-files.ts"],
           "@repo/db/lock": ["packages/db/src/pglite-lock.ts"],
@@ -55,7 +56,9 @@ for (const file of [
 let bytes = 0;
 function inspect(directory: string) {
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
-    const path = join(directory, entry.name);
+    const path = resolve(directory, entry.name);
+    const inside = relative(dist, path);
+    if (inside.startsWith("..") || isAbsolute(inside)) throw new Error(`Artifact outside dist: ${path}`);
     if (entry.isDirectory()) inspect(path);
     else {
       bytes += statSync(path).size;

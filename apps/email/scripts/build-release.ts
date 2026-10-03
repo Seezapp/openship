@@ -36,7 +36,7 @@
 import { spawn } from 'node:child_process';
 import { cp, mkdir, rm, readFile, readdir, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -133,12 +133,23 @@ function isProbablyText(buf: Buffer): boolean {
   return !buf.subarray(0, 8192).includes(0);
 }
 
+/** `join` that refuses to leave `base` - entry names come from a directory listing. */
+function within(base: string, ...segments: string[]): string {
+  const root = resolve(base);
+  const target = resolve(root, ...segments);
+  const rel = relative(root, target);
+  if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+    throw new Error(`Path escapes ${root}: ${segments.join('/')}`);
+  }
+  return target;
+}
+
 async function scanForDevOrigins(dir: string): Promise<string[]> {
   const violations: string[] = [];
 
   async function walk(current: string): Promise<void> {
     for (const entry of await readdir(current, { withFileTypes: true })) {
-      const path = join(current, entry.name);
+      const path = within(current, entry.name);
       if (entry.isDirectory()) {
         await walk(path);
         continue;

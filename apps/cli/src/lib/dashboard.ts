@@ -11,7 +11,9 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { CACHE_DIR, downloadToFile } from "./cache";
+import { resolveWithin } from "@repo/core/safe-path";
+
+import { CACHE_DIR, downloadToFile, tagDir } from "./cache";
 import { assetUrl, expectedSha256, resolveLatestTag } from "./github-releases";
 
 /** Where release bundles are cached (named by `up --dry-run`). */
@@ -44,8 +46,8 @@ export interface DashboardBundle {
  * when present; fall back to the plain standalone entry otherwise.
  */
 function resolveDashboardEntry(cwd: string): string {
-  const wrapped = join(cwd, "standalone-server.mjs");
-  return existsSync(wrapped) ? wrapped : join(cwd, "server.js");
+  const wrapped = resolveWithin(cwd, "standalone-server.mjs");
+  return existsSync(wrapped) ? wrapped : resolveWithin(cwd, "server.js");
 }
 
 export async function ensureDashboard(
@@ -57,8 +59,8 @@ export async function ensureDashboard(
   // (i.e. apps/dashboard/.next/standalone). No checksum — it's your own build.
   const override = process.env.OPENSHIP_DASHBOARD_DIR?.trim();
   if (override) {
-    const cwd = join(override, "apps", "dashboard");
-    const serverJs = join(cwd, "server.js");
+    const cwd = resolveWithin(override, "apps", "dashboard");
+    const serverJs = resolveWithin(cwd, "server.js");
     if (!existsSync(serverJs)) {
       throw new Error(
         `OPENSHIP_DASHBOARD_DIR=${override} but ${serverJs} is missing — build the dashboard standalone first (see docs).`,
@@ -92,10 +94,10 @@ async function fetchBundle(
   tag: string,
   onProgress?: (received: number, total: number) => void,
 ): Promise<DashboardBundle> {
-  const dir = join(DASHBOARD_CACHE, tag);
-  const cwd = join(dir, "apps", "dashboard");
-  const serverJs = join(cwd, "server.js");
-  const marker = join(dir, ".extracted");
+  const dir = tagDir(DASHBOARD_CACHE, tag);
+  const cwd = resolveWithin(dir, "apps", "dashboard");
+  const serverJs = resolveWithin(cwd, "server.js");
+  const marker = resolveWithin(dir, ".extracted");
 
   // Cached + intact → reuse.
   if (existsSync(marker) && existsSync(serverJs)) {
@@ -107,7 +109,7 @@ async function fetchBundle(
   mkdirSync(dir, { recursive: true });
 
   const name = assetName(tag);
-  const tarball = join(dir, name);
+  const tarball = resolveWithin(dir, name);
   const { sha256 } = await downloadToFile(assetUrl(tag, name), tarball, onProgress);
 
   const expected = await expectedSha256(tag, name);

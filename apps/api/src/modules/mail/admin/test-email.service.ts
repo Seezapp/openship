@@ -296,7 +296,7 @@ export async function sendTestEmail(
     );
   }
 
-  let info: { messageId: string; response: string };
+  let info: { messageId: string; response?: string };
   try {
     info = await transporter.sendMail({
       // Personal-feeling display name + plain reply path keep the
@@ -325,7 +325,7 @@ export async function sendTestEmail(
     to,
     from,
     messageId: info.messageId,
-    smtpResponse: info.response,
+    smtpResponse: info.response ?? "",
   };
 }
 

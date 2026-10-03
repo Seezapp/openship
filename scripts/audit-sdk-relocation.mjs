@@ -2,7 +2,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { classifySourceText, moduleSpecifierLiteral } from "./sdk-relocation-compare.mjs";
@@ -99,6 +99,21 @@ const tracked = new Set(
 );
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
+/** `resolve` that refuses to leave `base` — paths come from Git, a baseline report, or a directory listing. */
+function within(base, ...segments) {
+  const root = resolve(base);
+  const target = resolve(root, ...segments);
+  const rel = relative(root, target);
+  if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+    throw new Error(`Path escapes ${root}: ${segments.join("/")}`);
+  }
+  return target;
+}
+function inRepo(path) {
+  const rel = relative(root, path);
+  return rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+}
+
 function resolveLocal(file, specifier) {
   let base;
   if (specifier.startsWith(".")) base = resolve(dirname(file), specifier);
@@ -114,7 +129,12 @@ function resolveLocal(file, specifier) {
   if (base.endsWith(".js")) candidates.unshift(base.slice(0, -3) + ".ts");
   return (
     candidates.find(
-      (path) => forward.has(path) || reverse.has(path) || tracked.has(path) || existsSync(path),
+      (path) =>
+        forward.has(path) ||
+        reverse.has(path) ||
+        tracked.has(path) ||
+        // An import specifier can climb anywhere; only the repository is probed.
+        (inRepo(path) && existsSync(path)),
     ) ?? base
   );
 }
@@ -374,13 +394,13 @@ for (const move of moves) {
 // staged-only originals and does not let Git's rename detection conceal a deletion.
 report.unmappedApiDeletions.push(
   ...baselineApiFiles
-    .filter((path) => !existsSync(resolve(root, path)) && !forward.has(resolve(root, path)))
+    .filter((path) => !existsSync(within(root, path)) && !forward.has(within(root, path)))
     .sort(),
 );
 
 function inspectEngine(directory) {
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
-    const file = join(directory, entry.name);
+    const file = within(directory, entry.name);
     if (entry.isDirectory()) {
       inspectEngine(file);
       continue;

@@ -72,6 +72,7 @@ import {
 } from "@repo/core";
 import { cloudEdgeRealIpConf, isCloudFrontedHost } from "./edge-real-ip";
 import { EDGE_UPSTREAM_DOWN_HANDLER } from "./edge-upstream-down";
+import { resolveWithinPosix } from "@repo/core/safe-path";
 import { sq } from "../system/local-shell";
 import type { RootChecked } from "../system/privilege";
 import { edgeDownExplanation } from "../system/edge-exec-error";
@@ -102,7 +103,14 @@ import { probeHostedHttp } from "../system/reachability";
  * certbot had really written — leaving the domain row `provisioning` with a null
  * sslExpiresAt, the one shape the renewal sweep skips. TLS expired unrenewed.
  */
-const { dirname, join } = edgePath;
+const { dirname } = edgePath;
+/**
+ * Every path this file builds lives under an edge directory (sites, certs, the ACME
+ * webroot) and takes a segment derived from a domain, a slug, a lineage name or a
+ * challenge token. Joined contained: a segment that would walk out of its directory
+ * throws instead of naming a file somewhere else on the edge.
+ */
+const within = resolveWithinPosix;
 
 /**
  * Reverse-proxy headers shared by every proxy_pass location.
@@ -1453,8 +1461,8 @@ export class NginxProvider implements RoutingProvider, SslProvider {
     const names = ["fullchain.pem", "privkey.pem"];
     if ("lineageDir" in cert) {
       for (let i = names.length - 1; i >= 0; i--) {
-        const link = await this._readlink(join(dir, names[i]));
-        if (link && edgePath.resolve(dir, link) === join(cert.lineageDir, names[i])) {
+        const link = await this._readlink(within(dir, names[i]));
+        if (link && edgePath.resolve(dir, link) === within(cert.lineageDir, names[i])) {
           names.splice(i, 1);
         }
       }
@@ -1465,15 +1473,15 @@ export class NginxProvider implements RoutingProvider, SslProvider {
       if ("lineageDir" in cert) {
         this._assertOneNamespace(dir, `link certificates in ${dir}`);
         for (const name of names) {
-          const target = join(cert.lineageDir, name);
-          const link = join(staging, name);
+          const target = within(cert.lineageDir, name);
+          const link = within(staging, name);
           if (this.executor) await this.executor.exec(`ln -s ${sq(target)} ${sq(link)}`);
           else await fsSymlink(target, link);
         }
       } else {
-        await this._writeFile(join(staging, "fullchain.pem"), cert.certPem);
+        await this._writeFile(within(staging, "fullchain.pem"), cert.certPem);
         // Imported keys need their own restrictive mode; mv preserves it.
-        await this._writeFile(join(staging, "privkey.pem"), cert.keyPem, 0o600);
+        await this._writeFile(within(staging, "privkey.pem"), cert.keyPem, 0o600);
       }
       if (this.executor) {
         // `mv staging/* dir/` (not `mv staging dir`) so an EXISTING cert dir is
@@ -1486,11 +1494,11 @@ export class NginxProvider implements RoutingProvider, SslProvider {
         // message) — don't drop that mode without adding the check here.
         await this._mkdir(dir);
         await this.executor.exec(
-          `mv -f ${names.map((name) => sq(join(staging, name))).join(" ")} ${sq(dir)}/`,
+          `mv -f ${names.map((name) => sq(within(staging, name))).join(" ")} ${sq(dir)}/`,
         );
       } else {
         await fsMkdir(dir, { recursive: true });
-        for (const name of names) await fsRename(join(staging, name), join(dir, name));
+        for (const name of names) await fsRename(within(staging, name), within(dir, name));
       }
     } finally {
       await this._rm(staging).catch(() => undefined);
@@ -1502,7 +1510,7 @@ export class NginxProvider implements RoutingProvider, SslProvider {
    * `live/`, deliberately not inside it. See {@link ensureBootstrapCert}.
    */
   private bootstrapCertDir(domain: string): string {
-    return join(dirname(this.certDir), BOOTSTRAP_CERT_SEGMENT, domain);
+    return within(dirname(this.certDir), BOOTSTRAP_CERT_SEGMENT, domain);
   }
 
   /**
@@ -1543,8 +1551,8 @@ export class NginxProvider implements RoutingProvider, SslProvider {
     domain: string,
   ): Promise<{ certPath: string; keyPath: string } | null> {
     const dir = this.bootstrapCertDir(domain);
-    const certPath = join(dir, "fullchain.pem");
-    const keyPath = join(dir, "privkey.pem");
+    const certPath = within(dir, "fullchain.pem");
+    const keyPath = within(dir, "privkey.pem");
 
     // `openssl` writes the pair on the COMMAND channel while `_exists`/`_mkdir` use the
     // FILE one, so off a same-path mount this would return two paths the host does not
@@ -1582,9 +1590,9 @@ export class NginxProvider implements RoutingProvider, SslProvider {
         "rsa:2048",
         "-nodes",
         "-keyout",
-        join(staging, "privkey.pem"),
+        within(staging, "privkey.pem"),
         "-out",
-        join(staging, "fullchain.pem"),
+        within(staging, "fullchain.pem"),
         "-days",
         "3650",
         "-subj",
@@ -1595,17 +1603,17 @@ export class NginxProvider implements RoutingProvider, SslProvider {
       // Stated rather than inherited from openssl's own file mode — busybox and
       // LibreSSL are not obliged to match OpenSSL's 0600. On the STAGED path, because
       // `mv` preserves the mode and a chmod after publishing leaves a 0644 window.
-      await this._chmod(join(staging, "privkey.pem"), 0o600);
+      await this._chmod(within(staging, "privkey.pem"), 0o600);
       // Same atomic pair-swap as stageCertDir: OpenResty must never see a cert
       // beside a key that doesn't open it.
       await this._mkdir(dir);
       if (this.executor) {
         await this.executor.exec(
-          `mv -f ${sq(join(staging, "fullchain.pem"))} ${sq(join(staging, "privkey.pem"))} ${sq(dir)}/`,
+          `mv -f ${sq(within(staging, "fullchain.pem"))} ${sq(within(staging, "privkey.pem"))} ${sq(dir)}/`,
         );
       } else {
-        await fsRename(join(staging, "fullchain.pem"), certPath);
-        await fsRename(join(staging, "privkey.pem"), keyPath);
+        await fsRename(within(staging, "fullchain.pem"), certPath);
+        await fsRename(within(staging, "privkey.pem"), keyPath);
       }
       return { certPath, keyPath };
     } catch (err) {
@@ -1680,7 +1688,7 @@ export class NginxProvider implements RoutingProvider, SslProvider {
     const isFile = await fsStat(servedPath)
       .then((s) => s.isFile())
       .catch(() => false);
-    const hasIndex = isFile || (await this._exists(join(servedPath, "index.html")));
+    const hasIndex = isFile || (await this._exists(within(servedPath, "index.html")));
     return { found: true, hasIndex, checked: true };
   }
 
@@ -1738,8 +1746,8 @@ export class NginxProvider implements RoutingProvider, SslProvider {
    */
   private async createEphemeralEabConfig(): Promise<string | null> {
     if (!this.acmeEabKid || !this.acmeEabHmacKey) return null;
-    const dir = join(dirname(this.certDir), `.openship-eab-${randomBytes(12).toString("hex")}`);
-    const path = join(dir, "eab.ini");
+    const dir = within(dirname(this.certDir), `.openship-eab-${randomBytes(12).toString("hex")}`);
+    const path = within(dir, "eab.ini");
     if (this.executor) await this.executor.mkdir(dir);
     else await fsMkdir(dir, { recursive: true, mode: 0o700 });
     try {
@@ -1766,10 +1774,10 @@ export class NginxProvider implements RoutingProvider, SslProvider {
     opts?: ProvisionCertOptions,
   ): Promise<{ dir: string; authCommand: string; cleanupCommand?: string } | null> {
     if (!opts?.dnsAuthHookScript) return null;
-    const dir = join(dirname(this.certDir), `.openship-dns-${randomBytes(12).toString("hex")}`);
-    const authPath = join(dir, "auth.sh");
-    const cleanupPath = join(dir, "cleanup.sh");
-    const recordPath = join(dir, "record-id.txt");
+    const dir = within(dirname(this.certDir), `.openship-dns-${randomBytes(12).toString("hex")}`);
+    const authPath = within(dir, "auth.sh");
+    const cleanupPath = within(dir, "cleanup.sh");
+    const recordPath = within(dir, "record-id.txt");
     await this._mkdir(dir);
     try {
       await this._chmod(dir, 0o700);
@@ -1824,7 +1832,7 @@ export class NginxProvider implements RoutingProvider, SslProvider {
     await this._mkdir(this.sitesDir);
 
     const slug = await this.resolveSlug(route.domain);
-    const configPath = join(this.sitesDir, `${slug}.conf`);
+    const configPath = within(this.sitesDir, `${slug}.conf`);
     if ("staticRoot" in route && route.staticRoot) {
       assertValidStaticRoot(route.staticRoot, { adopted: route.staticRootAdopted });
     } else {
@@ -1996,8 +2004,8 @@ ${serveLocation}
     let bootstrapServed = false;
 
     if (route.tls && (await this.certsExist(route.domain))) {
-      const certPath = join(this.certDir, route.domain, "fullchain.pem");
-      const keyPath = join(this.certDir, route.domain, "privkey.pem");
+      const certPath = within(this.certDir, route.domain, "fullchain.pem");
+      const keyPath = within(this.certDir, route.domain, "privkey.pem");
       // Full SSL config - certs already provisioned. The :80 block carries the
       // full app body too (not just a redirect), because behind a TLS-terminating
       // CDN it is the block that actually serves — including the rules guard, so
@@ -2121,7 +2129,7 @@ ${serveLocation}
   }
 
   private routeStatePath(slug: string): string {
-    return join(this.sitesDir, `${slug}.route.json`);
+    return within(this.sitesDir, `${slug}.route.json`);
   }
 
   /**
@@ -2182,7 +2190,7 @@ ${serveLocation}
       try {
         // A sidecar whose conf is gone is not a route: removeRoute deletes both, and
         // writing one back would resurrect a vhost an operator removed.
-        const conf = await this._readFile(join(this.sitesDir, `${slug}.conf`)).catch(() => null);
+        const conf = await this._readFile(within(this.sitesDir, `${slug}.conf`)).catch(() => null);
         if (conf === null) continue;
         const gen = readVhostGeneration(conf);
         if (gen !== null && gen >= VHOST_GENERATION) continue;
@@ -2290,7 +2298,7 @@ ${serveLocation}
       throw new Error(`Route removal aborted before it started: ${domain}`);
     }
     const slug = await this.resolveSlug(domain);
-    const configPath = join(this.sitesDir, `${slug}.conf`);
+    const configPath = within(this.sitesDir, `${slug}.conf`);
     const statePath = this.routeStatePath(slug);
     const confSnapshot = await this._captureFile(configPath);
     const stateSnapshot = await this._captureFile(statePath);
@@ -2332,7 +2340,7 @@ ${serveLocation}
    *  `registerRoute`/`removeRoute` for any domain can overwrite or delete it —
    *  matching the existing `_default.conf` / `_management.conf` convention. */
   private challengeVhostPath(host: string): string {
-    return join(this.sitesDir, `_oblien-challenge-${this.domainSlug(host)}.conf`);
+    return within(this.sitesDir, `_oblien-challenge-${this.domainSlug(host)}.conf`);
   }
 
   /**
@@ -2375,7 +2383,7 @@ ${serveLocation}
     //    the container path — this mount is the one whose two sides differ.
     //    `_writeFile` creates the parent dir on both the local and executor paths.
     for (const token of tokens) {
-      await this._writeFile(join(this.challengeDir, token), token);
+      await this._writeFile(within(this.challengeDir, token), token);
     }
 
     // 2. Is some Openship-managed vhost already answering for this host? Only the
@@ -2386,7 +2394,7 @@ ${serveLocation}
     //    confidently answer for the wrong filesystem.
     const base = this.domainSlug(host);
     for (const stem of [base, `${base}-${this.slugSuffix(host)}`]) {
-      const path = join(this.sitesDir, `${stem}.conf`);
+      const path = within(this.sitesDir, `${stem}.conf`);
       const conf = await this._readFile(path).catch(() => "");
       if (!conf || !this.serverNamesIn(conf).includes(host)) continue;
       // It claims the host. If it already carries the challenge location (written by
@@ -2578,8 +2586,8 @@ ${serveLocation}
     const reportedPath = certonlyOut
       .match(/^Certificate is saved at:\s*(.+\/fullchain\.pem)\s*$/m)?.[1]
       ?.trim();
-    const issuedDir = reportedPath ? dirname(reportedPath) : join(this.certDir, lineage);
-    if (issuedDir !== join(this.certDir, domain)) {
+    const issuedDir = reportedPath ? dirname(reportedPath) : within(this.certDir, lineage);
+    if (issuedDir !== within(this.certDir, domain)) {
       await this.useCertbotLineage(domain, issuedDir);
     }
 
@@ -2592,7 +2600,7 @@ ${serveLocation}
     assertValidDomain(domain);
     // Rewrite the config with SSL now that certs exist
     const slug = await this.resolveSlug(domain);
-    const configPath = join(this.sitesDir, `${slug}.conf`);
+    const configPath = within(this.sitesDir, `${slug}.conf`);
 
     // Prefer the persisted RouteConfig sidecar so the re-register keeps every
     // location (composite proxyLocations + webhookProxy), not just the primary.
@@ -2677,7 +2685,7 @@ ${serveLocation}
     const result = await this.readCertInfo(domain);
     if (result.verified) return result;
 
-    const dir = join(this.certDir, domain);
+    const dir = within(this.certDir, domain);
     const onDisk =
       result.reason === "read_error"
         ? `a certificate is at ${dir} but couldn't be read (permissions, or a partial write)`
@@ -2741,7 +2749,7 @@ ${serveLocation}
       ["renew", "--cert-name", lineage, "--standalone", "--http-01-port", String(ACME_HTTP01_PORT), ...acmeKeyArgs(this.acmeKeyType), "--non-interactive", "--no-random-sleep-on-renew"],
       opts?.onLog,
     );
-    if (lineage !== domain) await this.useCertbotLineage(domain, join(this.certDir, lineage));
+    if (lineage !== domain) await this.useCertbotLineage(domain, within(this.certDir, lineage));
     await this.reload();
 
     return this.readCertInfo(domain);
@@ -2754,7 +2762,7 @@ ${serveLocation}
   private renewalConfPath(domain: string): string {
     // Derived from certDir so a custom cert root (tests, container edge) stays
     // consistent: /etc/letsencrypt/live → /etc/letsencrypt/renewal.
-    return join(dirname(this.certDir), "renewal", `${domain}.conf`);
+    return within(dirname(this.certDir), "renewal", `${domain}.conf`);
   }
 
   private async hasCertbotLineage(domain: string): Promise<boolean> {
@@ -2762,12 +2770,12 @@ ${serveLocation}
       await this._readFile(this.renewalConfPath(domain)).catch(() => ""),
     );
     if (!record) return false;
-    const archive = record.archiveDir ?? join(dirname(this.certDir), "archive", domain);
+    const archive = record.archiveDir ?? within(dirname(this.certDir), "archive", domain);
     if (!edgePath.isAbsolute(archive)) return false;
     // Certbot requires all four file references and live archive links. A usable
     // served PEM pair alone cannot prove its renewal record survived an import.
     for (const [kind, file] of Object.entries(record.files)) {
-      const expected = join(this.certDir, domain, `${kind}.pem`);
+      const expected = within(this.certDir, domain, `${kind}.pem`);
       if (!edgePath.isAbsolute(file) || edgePath.normalize(file) !== expected) return false;
       const link = await this._readlink(expected);
       if (!link || !(await this._exists(expected))) return false;
@@ -2788,8 +2796,8 @@ ${serveLocation}
       const name = suffix ? `${domain}-${String(suffix).padStart(4, "0")}` : domain;
       const occupied = await Promise.all(
         [
-          join(this.certDir, name),
-          join(dirname(this.certDir), "archive", name),
+          within(this.certDir, name),
+          within(dirname(this.certDir), "archive", name),
           this.renewalConfPath(name),
         ].map(async (path) => (await this._exists(path)) || !!(await this._readlink(path))),
       );
@@ -2798,7 +2806,7 @@ ${serveLocation}
   }
 
   private async findCertbotLineage(domain: string): Promise<string | null> {
-    const servedPath = join(this.certDir, domain, "fullchain.pem");
+    const servedPath = within(this.certDir, domain, "fullchain.pem");
     const link = await this._readlink(servedPath);
     if (link) {
       const linkedDir = dirname(edgePath.resolve(dirname(servedPath), link));
@@ -2824,8 +2832,8 @@ ${serveLocation}
         const candidate = validateCertFor(
           domain,
           {
-            certPem: await this._readFile(join(dir, "fullchain.pem")),
-            keyPem: await this._readFile(join(dir, "privkey.pem")),
+            certPem: await this._readFile(within(dir, "fullchain.pem")),
+            keyPem: await this._readFile(within(dir, "privkey.pem")),
           },
           dir,
         );
@@ -2849,8 +2857,8 @@ ${serveLocation}
     let pair: ManualCert;
     try {
       pair = {
-        certPem: await this._readFile(join(dir, "fullchain.pem")),
-        keyPem: await this._readFile(join(dir, "privkey.pem")),
+        certPem: await this._readFile(within(dir, "fullchain.pem")),
+        keyPem: await this._readFile(within(dir, "privkey.pem")),
       };
     } catch (error) {
       throw new Error(
@@ -2859,7 +2867,7 @@ ${serveLocation}
     }
     const candidate = validateCertFor(domain, pair, dir);
     if (!candidate.cert) throw new Error(`Invalid issued certificate: ${candidate.reason}`);
-    await this.stageCertDir(join(this.certDir, domain), { lineageDir: dir });
+    await this.stageCertDir(within(this.certDir, domain), { lineageDir: dir });
   }
 
   /**
@@ -2907,7 +2915,7 @@ ${serveLocation}
     const { expiresAt } = candidate.cert;
 
     // Stage both PEMs before replacing the served files and reloading the edge.
-    const dir = join(this.certDir, domain);
+    const dir = within(this.certDir, domain);
     await this.stageCertDir(dir, cert);
 
     await this.activateCert(domain);
@@ -2995,11 +3003,11 @@ ${serveLocation}
     const suffixed = `${base}-${this.slugSuffix(domain)}`;
     const host = domain.toLowerCase().replace(/\.$/, "");
 
-    if (await this._exists(join(this.sitesDir, `${suffixed}.conf`)).catch(() => false)) {
+    if (await this._exists(within(this.sitesDir, `${suffixed}.conf`)).catch(() => false)) {
       return suffixed;
     }
 
-    const basePath = join(this.sitesDir, `${base}.conf`);
+    const basePath = within(this.sitesDir, `${base}.conf`);
     if (await this._exists(basePath).catch(() => false)) {
       const conf = await this._readFile(basePath).catch(() => "");
       // Unreadable/empty → treat as ours rather than fragmenting on a read blip.
@@ -3063,7 +3071,7 @@ ${serveLocation}
   }
 
   private async certsExist(domain: string): Promise<boolean> {
-    const certPath = join(this.certDir, domain, "fullchain.pem");
+    const certPath = within(this.certDir, domain, "fullchain.pem");
     if (this.executor) {
       return this.executor.exists(certPath);
     }
@@ -3089,8 +3097,8 @@ ${serveLocation}
     let certPem: string;
     let keyPem: string;
     try {
-      certPem = await this._readFile(join(this.certDir, domain, "fullchain.pem"));
-      keyPem = await this._readFile(join(this.certDir, domain, "privkey.pem"));
+      certPem = await this._readFile(within(this.certDir, domain, "fullchain.pem"));
+      keyPem = await this._readFile(within(this.certDir, domain, "privkey.pem"));
     } catch {
       // The file exists but couldn't be read (SSH blip, permissions, partial
       // write). Transient — the caller must NOT treat this as "no cert".
@@ -3133,12 +3141,12 @@ ${serveLocation}
 
   /** Dedicated include dir for Openship-managed OpenResty snippets. */
   private get rateLimitIncludeDir(): string {
-    return join(dirname(this.sitesDir), "openship-includes");
+    return within(dirname(this.sitesDir), "openship-includes");
   }
 
   /** Path to the managed rate-limit snippet inside the dedicated include dir. */
   private get rateLimitConfPath(): string {
-    return join(this.rateLimitIncludeDir, "ratelimit.conf");
+    return within(this.rateLimitIncludeDir, "ratelimit.conf");
   }
 
   /**
@@ -3152,7 +3160,7 @@ ${serveLocation}
    */
   async applyRateLimit(config: RateLimitConfig): Promise<void> {
     const confPath = this.rateLimitConfPath;
-    const nginxConfPath = join(dirname(this.sitesDir), "nginx.conf");
+    const nginxConfPath = within(dirname(this.sitesDir), "nginx.conf");
     const snapshots = {
       nginx: await this._captureFile(nginxConfPath),
       current: await this._captureFile(confPath),
@@ -3255,7 +3263,7 @@ ${geoEntries.join("\n")}
    */
   private async ensureRateLimitInclude(): Promise<void> {
     const confDir = dirname(this.sitesDir);
-    const confPath = join(confDir, "nginx.conf");
+    const confPath = within(confDir, "nginx.conf");
     const desiredIncludeLine = `include ${this.rateLimitIncludeDir}/*.conf;`;
     const content = await this._readFile(confPath);
     const trailingNewline = content.endsWith("\n");

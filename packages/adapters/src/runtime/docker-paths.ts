@@ -1,5 +1,6 @@
 import { access, readdir } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { resolveWithin } from "@repo/core/safe-path";
 
 function toPosixPath(value: string): string {
   return value.split(sep).filter(Boolean).join("/");
@@ -229,7 +230,7 @@ async function manifestCount(dir: string): Promise<number> {
   let count = 0;
 
   for (const file of ROOT_MANIFESTS) {
-    if (await pathExists(join(dir, file))) {
+    if (await pathExists(resolveWithin(dir, file))) {
       count += 1;
     }
   }

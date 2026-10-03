@@ -39,6 +39,17 @@ function leafEntries(obj, prefix = "", out = {}) {
   return out;
 }
 
+/** `path.join` that refuses to leave `base` — locale and namespace names come from directory listings. */
+function within(base, ...segments) {
+  const root = path.resolve(base);
+  const target = path.resolve(root, ...segments);
+  const rel = path.relative(root, target);
+  if (rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) {
+    throw new Error(`Path escapes ${root}: ${segments.join("/")}`);
+  }
+  return target;
+}
+
 function readJson(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
 }
@@ -72,14 +83,14 @@ function looksTranslatable(value) {
  * }}
  */
 export function checkI18nParity(localesDir = defaultLocalesDir()) {
-  const enDir = path.join(localesDir, SOURCE_LOCALE);
+  const enDir = within(localesDir, SOURCE_LOCALE);
   const namespaces = fs
     .readdirSync(enDir)
     .filter((f) => f.endsWith(".json"))
     .map((f) => f.replace(/\.json$/, ""));
   const locales = fs
     .readdirSync(localesDir)
-    .filter((d) => d !== SOURCE_LOCALE && fs.statSync(path.join(localesDir, d)).isDirectory());
+    .filter((d) => d !== SOURCE_LOCALE && fs.statSync(within(localesDir, d)).isDirectory());
 
   const missing = [];
   const extra = [];
@@ -89,11 +100,11 @@ export function checkI18nParity(localesDir = defaultLocalesDir()) {
   const byNamespaceUntranslated = {};
 
   for (const ns of namespaces) {
-    const baseEntries = leafEntries(readJson(path.join(enDir, `${ns}.json`)));
+    const baseEntries = leafEntries(readJson(within(enDir, `${ns}.json`)));
     const base = Object.keys(baseEntries);
     const baseSet = new Set(base);
     for (const locale of locales) {
-      const file = path.join(localesDir, locale, `${ns}.json`);
+      const file = within(localesDir, locale, `${ns}.json`);
       let localeEntries = {};
       if (fs.existsSync(file)) localeEntries = leafEntries(readJson(file));
       const localeKeys = new Set(Object.keys(localeEntries));

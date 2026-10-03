@@ -2,7 +2,7 @@
  * SSH+psql wrapper for the mail admin panel.
  *
  * All `vmail.*` reads and writes go through this module. Every other admin
- * service composes SQL strings via `q()` and hands them to `queryRows` /
+ * service builds its statements with `sql` and hands them to `queryRows` /
  * `execute`. There is intentionally no Drizzle / pg-driver layer here - we
  * picked the SSH-over-psql path so we don't have to expose the mail VPS's
  * Postgres port or store a separate DB credential. See `mail-admin-panel`
@@ -17,11 +17,16 @@
  *   execute() runs DML/DDL with `ON_ERROR_STOP=1` so errors bubble up as
  *   thrown exceptions (the underlying executor throws on non-zero exit).
  *
- * Quoting:
- *   `q()` is the ONLY way user input enters SQL. It single-quote-wraps the
- *   value and doubles inner `'` per the PostgreSQL standard. Identifiers
- *   (table / column names) are NEVER taken from user input - they're hard-
- *   coded in the service files.
+ * Values:
+ *   Queries are built with the `sql` tagged template (`./sql`), which turns
+ *   every interpolated value into a BIND PARAMETER: the statement text holds
+ *   only `:'vN'` references and psql substitutes the values, handed over as
+ *   `-v` variables, as correctly escaped literals. Identifiers (table /
+ *   column names) are NEVER taken from user input - they're hard-coded in
+ *   the service files.
+ *
+ *   A plain-string query is still accepted for callers not yet converted;
+ *   for those `q()` is the only way a value may enter the string.
  *
  * Transport:
  *   HOW psql is reached is not decided here. `runMailSql` resolves the box's mail
@@ -35,6 +40,7 @@
 import type { CommandExecutor } from "@repo/adapters";
 import { safeErrorMessage } from "@repo/core";
 import { runMailSql, type MailTarget } from "../mail-engine";
+import { isSqlQuery, sql as bind, sqlJoin, sqlRaw, type SqlQuery } from "./sql";
 
 /**
  * Quote a value as a PostgreSQL string literal. Escapes embedded single
@@ -76,9 +82,11 @@ export function qInt(value: number): string {
  */
 export async function queryRows<T>(
   serverIdOrExec: string | CommandExecutor,
-  sql: string,
+  sql: string | SqlQuery,
 ): Promise<T[]> {
-  const wrapped = `SELECT COALESCE(json_agg(row_to_json(__t)), '[]'::json) FROM (${sql}) __t`;
+  const wrapped = isSqlQuery(sql)
+    ? bind`SELECT COALESCE(json_agg(row_to_json(__t)), '[]'::json) FROM (${sql}) __t`
+    : `SELECT COALESCE(json_agg(row_to_json(__t)), '[]'::json) FROM (${sql}) __t`;
   const out = await runSql(serverIdOrExec, wrapped);
   const trimmed = out.trim();
   if (!trimmed) return [];
@@ -106,13 +114,13 @@ export async function queryRows<T>(
  */
 export async function queryOne<T>(
   serverIdOrExec: string | CommandExecutor,
-  sql: string,
+  sql: string | SqlQuery,
 ): Promise<T | null> {
   const rows = await queryRows<T>(serverIdOrExec, sql);
   if (rows.length === 0) return null;
   if (rows.length > 1) {
     throw new Error(
-      `queryOne expected ≤1 row, got ${rows.length}. SQL head: ${sql.slice(0, 120)}`,
+      `queryOne expected ≤1 row, got ${rows.length}. SQL head: ${(isSqlQuery(sql) ? sql.text : sql).slice(0, 120)}`,
     );
   }
   return rows[0];
@@ -128,7 +136,7 @@ export async function queryOne<T>(
  */
 export async function execute(
   serverIdOrExec: string | CommandExecutor,
-  sql: string,
+  sql: string | SqlQuery,
 ): Promise<string> {
   return runSql(serverIdOrExec, sql);
 }
@@ -145,9 +153,19 @@ export async function execute(
  */
 export async function transaction(
   serverIdOrExec: string | CommandExecutor,
-  statements: string[],
+  statements: readonly (string | SqlQuery)[],
 ): Promise<void> {
-  const body = ["BEGIN;", ...statements.map((s) => s.replace(/;?\s*$/, ";")), "COMMIT;"].join("\n");
+  if (statements.every(isSqlQuery)) {
+    // Bound path: the statements go to psql on stdin under `-1`, which wraps
+    // them in one transaction itself, and every value travels as a `-v`
+    // variable — see `mailPsqlCommand`.
+    const terminated = statements.map((s) => bind`${s}${sqlRaw(/;\s*$/.test(s.text) ? "" : ";")}`);
+    await runSql(serverIdOrExec, sqlJoin(terminated, "\n"));
+    return;
+  }
+
+  // Legacy path (plain strings; a bound statement mixed in is inlined as text).
+  const body = ["BEGIN;", ...statements.map((s) => String(s).replace(/;?\s*$/, ";")), "COMMIT;"].join("\n");
 
   // Pass the whole transaction as a single shell-quoted `-c` argument — the
   // same safe path `execute()` uses. NEVER a heredoc: a heredoc with a fixed
@@ -170,6 +188,6 @@ export async function transaction(
  * `MailDbNotInitializedError` carrying the exact bootstrap command (→ 409 + a code the
  * dashboard branches on), not as a raw shell error the panel prints as "API 500".
  */
-async function runSql(serverIdOrExec: MailTarget, sql: string): Promise<string> {
+async function runSql(serverIdOrExec: MailTarget, sql: string | SqlQuery): Promise<string> {
   return runMailSql(serverIdOrExec, sql);
 }

@@ -5,6 +5,7 @@
  */
 import { readFileSync, existsSync } from "node:fs";
 import { join, dirname, parse } from "node:path";
+import { resolveWithin } from "@repo/core/safe-path";
 
 export interface ProjectLink {
   projectId?: string;
@@ -23,7 +24,7 @@ export function findProjectLinkPath(from: string = process.cwd()): string | null
   let dir = from;
   const root = parse(dir).root;
   for (;;) {
-    const candidate = join(dir, LINK_REL);
+    const candidate = resolveWithin(dir, LINK_REL);
     if (existsSync(candidate)) return candidate;
     if (dir === root) return null;
     dir = dirname(dir);

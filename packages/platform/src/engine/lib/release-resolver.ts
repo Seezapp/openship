@@ -21,6 +21,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { GithubReleasePayload, ReleaseSource } from "@repo/core";
 import { renderAssetName } from "@repo/core";
+import { isWithin, resolveWithin } from "@repo/core/safe-path";
 import { APP_VERSION } from "./app-version";
 import { fetchAndExtractRelease } from "./release-download";
 import { safeFetch } from "./safe-fetch";
@@ -120,7 +121,7 @@ export async function resolveReleaseDist(spec: ReleaseDistSpec): Promise<Release
   if (spec.envOverride) {
     const raw = process.env[spec.envOverride];
     if (raw) {
-      const dir = spec.envOverrideSubdir ? resolve(raw, spec.envOverrideSubdir) : resolve(raw);
+      const dir = spec.envOverrideSubdir ? resolveWithin(raw, spec.envOverrideSubdir) : resolve(raw);
       if (existsSync(dir)) return { dir, version, origin: "env" };
       throw new ReleaseDistMissingError(spec.name, dir);
     }
@@ -132,8 +133,8 @@ export async function resolveReleaseDist(spec: ReleaseDistSpec): Promise<Release
   }
 
   // Slot 3: cache; download on miss.
-  const cacheDir = join(spec.dataDir ?? computeDataDir(), `${spec.name}-dist`);
-  const cachedTarget = join(cacheDir, tag);
+  const cacheDir = resolveWithin(spec.dataDir ?? computeDataDir(), `${spec.name}-dist`);
+  const cachedTarget = resolveWithin(cacheDir, tag);
   if (existsSync(cachedTarget)) return { dir: cachedTarget, version, origin: "cache-hit" };
 
   const src = spec.source;
@@ -170,12 +171,15 @@ export function resolveReleaseDistOrNull(spec: ReleaseDistSpec): string | null {
   if (spec.envOverride) {
     const raw = process.env[spec.envOverride];
     if (raw) {
-      const dir = spec.envOverrideSubdir ? resolve(raw, spec.envOverrideSubdir) : resolve(raw);
+      const dir = spec.envOverrideSubdir ? resolveWithin(raw, spec.envOverrideSubdir) : resolve(raw);
       return existsSync(dir) ? dir : null;
     }
   }
   if (spec.repoLocalPath && existsSync(spec.repoLocalPath)) return spec.repoLocalPath;
-  const cached = join(spec.dataDir ?? computeDataDir(), `${spec.name}-dist`, `v${version}`);
+  const segments = [`${spec.name}-dist`, `v${version}`];
+  const dataDir = spec.dataDir ?? computeDataDir();
+  if (!isWithin(dataDir, ...segments)) return null;
+  const cached = resolveWithin(dataDir, ...segments);
   return existsSync(cached) ? cached : null;
 }
 

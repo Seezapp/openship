@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { createHash, generateKeyPairSync, sign as cryptoSign } from "node:crypto";
-import { verifyAndBuild, fetchRemoteCatalog } from "./catalog-source";
+import { verifyAndBuild, fetchRemoteCatalog, catalogUrl } from "./catalog-source";
 import type { ModuleCatalog } from "./types";
 
 const H = (s: string) => createHash("sha256").update(Buffer.from(s, "utf8")).digest("hex");
@@ -114,6 +114,28 @@ describe("verifyAndBuild shape refusals", () => {
   it("refuses a non-object manifest without dereferencing it", () => {
     const res = build(null);
     expect(res.error).toBe("invalid catalog: catalog is not an object (got null)");
+  });
+});
+
+describe("catalogUrl pins fetches to the catalog directory", () => {
+  const root = catalogUrl("openresty", "").href;
+
+  it("resolves manifest and nested asset paths under the module directory", () => {
+    expect(root.endsWith("/modules/openresty/")).toBe(true);
+    expect(catalogUrl("openresty", "catalog.json").href).toBe(`${root}catalog.json`);
+    expect(catalogUrl("openresty", "assets/lua/guard.lua").href).toBe(`${root}assets/lua/guard.lua`);
+  });
+
+  it("refuses asset keys that leave the directory or the host", () => {
+    for (const key of ["../other/catalog.json", "a/../../x", "/etc/passwd/../../../../x", "%2e%2e/x"]) {
+      expect(() => catalogUrl("openresty", key), key).toThrow(/escapes the pinned catalog/);
+    }
+  });
+
+  it("refuses module names that are not a plain path segment", () => {
+    for (const name of ["..", "a/b", "", "x@evil.example", ".hidden"]) {
+      expect(() => catalogUrl(name, "catalog.json"), name).toThrow(/invalid module name/);
+    }
   });
 });
 

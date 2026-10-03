@@ -65,4 +65,24 @@ describe("openAuthWindow", () => {
     expect(popup.location.href).toBe("https://api.openship.io/api/github/connect/redirect");
     expect(popup.focus).toHaveBeenCalledOnce();
   });
+
+  it("never points the popup at a non-http(s) URL", () => {
+    const popup = {
+      closed: false,
+      location: { href: "about:blank" },
+      focus: vi.fn(),
+      close: vi.fn(),
+    };
+    const open = vi.fn((_url?: string) => popup);
+    vi.stubGlobal("window", { screen: { width: 1440, height: 900 }, open });
+
+    const handle = openAuthWindow("javascript:alert(document.domain)");
+    expect(open.mock.calls[0]?.[0]).toBe("about:blank");
+
+    for (const url of ["javascript:alert(1)", "data:text/html,<script>1</script>", "//evil.example", "/relative"]) {
+      handle.navigate(url);
+    }
+    expect(popup.location.href).toBe("about:blank");
+    expect(popup.focus).not.toHaveBeenCalled();
+  });
 });

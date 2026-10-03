@@ -35,13 +35,18 @@ vi.mock("@repo/platform/engine/lib/encryption", () => ({
 }));
 // Mock psql-runner: (a) its real transitive imports (ssh-manager/env) throw in
 // tests, (b) capturing the SQL lets us assert sender_relayhost routing directly.
-const pg = vi.hoisted(() => ({ sqlCalls: [] as string[] }));
+// `sqlCalls` holds each statement rendered with its values inlined (the debug
+// form — never what is executed); `queries` keeps the bound form the runner gets.
+const pg = vi.hoisted(() => ({
+  sqlCalls: [] as string[],
+  queries: [] as { text: string; params: readonly string[] }[],
+}));
 vi.mock("@repo/platform/engine/modules/mail/admin/psql-runner", () => ({
-  execute: async (_exec: unknown, sql: string) => {
-    pg.sqlCalls.push(sql);
+  execute: async (_exec: unknown, sql: { text: string; params: readonly string[] }) => {
+    pg.sqlCalls.push(String(sql));
+    pg.queries.push(sql);
     return "";
   },
-  q: (v: string) => `'${v.replace(/'/g, "''")}'`,
 }));
 
 import {
@@ -155,6 +160,7 @@ function makeExec(
 
 beforeEach(() => {
   pg.sqlCalls.length = 0;
+  pg.queries.length = 0;
   fakeState = {
     serverId: "srv1",
     domain: "example.com",
@@ -416,6 +422,12 @@ describe("per-domain routing (enterprise)", () => {
     expect(inserts.length).toBe(1);
     expect(inserts[0]).toContain("'@x.com'");
     expect(inserts[0]).toContain("'[email-smtp.us-east-1.amazonaws.com]:587'");
+    // …and both travel as bind parameters: the statement text names only `:'vN'`.
+    const bound = pg.queries.find((q) => /INSERT INTO sender_relayhost/i.test(q.text))!;
+    expect(bound.params).toEqual(["@x.com", "[email-smtp.us-east-1.amazonaws.com]:587"]);
+    expect(bound.text).toContain("VALUES (:'v0', :'v1')");
+    expect(bound.text).not.toContain("x.com");
+    for (const q of pg.queries) for (const p of q.params) expect(q.text).not.toContain(p);
 
     // DNS fan-out: x.com gets the SES include; y.com stays clean.
     const s = fakeState as {

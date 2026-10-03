@@ -8,6 +8,7 @@
 import { Command } from "commander";
 import ora from "ora";
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { getShipClient, ApiError } from "../lib/ship-client";
 import { exitCommand, rethrowCommandExit } from "../lib/command-exit";
 import type { CreateBackupDestinationInput, UpdateBackupDestinationInput, PreflightBackupDestinationInput, UpdateBackupPolicyInput, PrepareBackupRestoreInput } from "@repo/sdk";
@@ -209,7 +210,7 @@ policyCmd
 
 policyCmd.command("update").description("Update a backup policy from a JSON file")
   .argument("<policyId>").argument("<file>").action((policyId, file) => guard(async () => {
-    const input = JSON.parse(readFileSync(file, "utf8")) as UpdateBackupPolicyInput;
+    const input = JSON.parse(readFileSync(resolve(file), "utf8")) as UpdateBackupPolicyInput;
     show(await getShipClient().backups.updatePolicy(policyId, input));
   }));
 policyCmd.command("remove").alias("rm").description("Remove a backup policy")
@@ -438,7 +439,7 @@ destinationCmd
       let sftpPrivateKey: string | undefined = opts.sftpPrivateKey;
       if (opts.sftpPrivateKeyFile) {
         try {
-          sftpPrivateKey = readFileSync(opts.sftpPrivateKeyFile, "utf8");
+          sftpPrivateKey = readFileSync(resolve(opts.sftpPrivateKeyFile), "utf8");
         } catch {
           throw new Error(`Cannot read key file: ${opts.sftpPrivateKeyFile}`);
         }
@@ -494,7 +495,7 @@ destinationCmd.command("usage").argument("<id>", "Destination ID")
 destinationCmd.command("update").argument("<id>", "Destination ID").argument("<file>", "JSON destination patch")
   .description("Update selected destination fields; omitted credentials stay unchanged")
   .action((id: string, file: string) => guard(async () => {
-    const input = JSON.parse(readFileSync(file, "utf8")) as UpdateBackupDestinationInput;
+    const input = JSON.parse(readFileSync(resolve(file), "utf8")) as UpdateBackupDestinationInput;
     show(await getShipClient().backupDestinations.update(id, input));
   }));
 destinationCmd.command("remove").alias("rm").argument("<id>", "Destination ID")
@@ -503,7 +504,7 @@ destinationCmd.command("remove").alias("rm").argument("<id>", "Destination ID")
 destinationCmd.command("preflight-draft").argument("<file>", "JSON destination input; include id to reuse saved credentials")
   .description("Test destination settings before saving them")
   .action((file: string) => guard(async () => {
-    const input = JSON.parse(readFileSync(file, "utf8")) as PreflightBackupDestinationInput;
+    const input = JSON.parse(readFileSync(resolve(file), "utf8")) as PreflightBackupDestinationInput;
     const result = await getShipClient().backupDestinations.preflightDraft(input);
     printJson(result);
     if (!result.ok) exitCommand(1);

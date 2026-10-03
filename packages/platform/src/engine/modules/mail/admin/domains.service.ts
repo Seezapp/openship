@@ -14,7 +14,8 @@
 import { sshManager } from "../../../lib/ssh-manager";
 import { readState } from "../mail-state";
 import { provisionDomainDkim, genSecret } from "../mail.service";
-import { execute, queryOne, queryRows, q, qInt } from "./psql-runner";
+import { execute, queryOne, queryRows } from "./psql-runner";
+import { sql, sqlJoin, sqlRaw, type SqlQuery } from "./sql";
 import { safeErrorMessage } from "@repo/core";
 import {
   buildDomainDnsRecords,
@@ -55,7 +56,7 @@ export interface UpdateDomainInput {
   active?: boolean;
 }
 
-const SELECT_COLUMNS = `
+const SELECT_COLUMNS = sqlRaw(`
   domain,
   description,
   mailboxes,
@@ -65,7 +66,7 @@ const SELECT_COLUMNS = `
   maxquota AS "defaultQuotaMB",
   (active = 1) AS active,
   created::text AS "createdAt"
-`;
+`);
 
 /**
  * Note on counter columns: iRedMail overloads `vmail.domain.mailboxes` and
@@ -91,7 +92,7 @@ export function validateDomain(domain: string): void {
 export async function listDomains(serverId: string): Promise<DomainRow[]> {
   return queryRows<DomainRow>(
     serverId,
-    `SELECT${SELECT_COLUMNS} FROM domain ORDER BY domain`,
+    sql`SELECT${SELECT_COLUMNS} FROM domain ORDER BY domain`,
   );
 }
 
@@ -102,7 +103,7 @@ export async function getDomain(
   validateDomain(domain);
   return queryOne<DomainRow>(
     serverId,
-    `SELECT${SELECT_COLUMNS} FROM domain WHERE domain = ${q(domain.toLowerCase())}`,
+    sql`SELECT${SELECT_COLUMNS} FROM domain WHERE domain = ${domain.toLowerCase()}`,
   );
 }
 
@@ -122,16 +123,16 @@ export async function createDomain(
 
   await execute(
     serverId,
-    `INSERT INTO domain (
+    sql`INSERT INTO domain (
         domain, description,
         mailboxes, aliases, maxquota,
         active, created, modified
       ) VALUES (
-        ${q(domain)},
-        ${q(input.description ?? "")},
-        ${qInt(input.maxMailboxes ?? 0)},
-        ${qInt(input.maxAliases ?? 0)},
-        ${qInt(input.defaultQuotaMB ?? 0)},
+        ${domain},
+        ${input.description ?? ""},
+        ${input.maxMailboxes ?? 0},
+        ${input.maxAliases ?? 0},
+        ${input.defaultQuotaMB ?? 0},
         1, NOW(), NOW()
       )`,
   );
@@ -284,21 +285,21 @@ export async function updateDomain(
   validateDomain(domain);
   const d = domain.toLowerCase();
 
-  const sets: string[] = ["modified = NOW()"];
+  const sets: SqlQuery[] = [sql`modified = NOW()`];
   if (patch.description !== undefined) {
-    sets.push(`description = ${q(patch.description)}`);
+    sets.push(sql`description = ${patch.description}`);
   }
   if (patch.maxMailboxes !== undefined) {
-    sets.push(`mailboxes = ${qInt(patch.maxMailboxes)}`);
+    sets.push(sql`mailboxes = ${patch.maxMailboxes}`);
   }
   if (patch.maxAliases !== undefined) {
-    sets.push(`aliases = ${qInt(patch.maxAliases)}`);
+    sets.push(sql`aliases = ${patch.maxAliases}`);
   }
   if (patch.defaultQuotaMB !== undefined) {
-    sets.push(`maxquota = ${qInt(patch.defaultQuotaMB)}`);
+    sets.push(sql`maxquota = ${patch.defaultQuotaMB}`);
   }
   if (patch.active !== undefined) {
-    sets.push(`active = ${patch.active ? 1 : 0}`);
+    sets.push(sql`active = ${patch.active ? 1 : 0}`);
   }
 
   if (sets.length === 1) {
@@ -310,7 +311,7 @@ export async function updateDomain(
 
   await execute(
     serverId,
-    `UPDATE domain SET ${sets.join(", ")} WHERE domain = ${q(d)}`,
+    sql`UPDATE domain SET ${sqlJoin(sets, ", ")} WHERE domain = ${d}`,
   );
 
   const row = await getDomain(serverId, d);
@@ -330,9 +331,9 @@ export async function countDomainDependents(
   const d = domain.toLowerCase();
   const row = await queryOne<{ mailboxes: number; aliases: number }>(
     serverId,
-    `SELECT
-       (SELECT COUNT(*)::int FROM mailbox WHERE domain = ${q(d)}) AS mailboxes,
-       (SELECT COUNT(*)::int FROM forwardings WHERE domain = ${q(d)} AND is_alias = 1) AS aliases`,
+    sql`SELECT
+       (SELECT COUNT(*)::int FROM mailbox WHERE domain = ${d}) AS mailboxes,
+       (SELECT COUNT(*)::int FROM forwardings WHERE domain = ${d} AND is_alias = 1) AS aliases`,
   );
   return row ?? { mailboxes: 0, aliases: 0 };
 }
@@ -384,14 +385,14 @@ export async function deleteDomain(
     // dangling forwards that pointed into the domain).
     await execute(
       serverId,
-      `DELETE FROM forwardings WHERE domain = ${q(d)}`,
+      sql`DELETE FROM forwardings WHERE domain = ${d}`,
     );
   }
 
   await execute(
     serverId,
-    `DELETE FROM domain_admins WHERE domain = ${q(d)};
-     DELETE FROM domain WHERE domain = ${q(d)};`,
+    sql`DELETE FROM domain_admins WHERE domain = ${d};
+     DELETE FROM domain WHERE domain = ${d};`,
   );
 
   // Best-effort: drop any persisted DNS-pending banner state so the
@@ -413,11 +414,11 @@ export async function recountDomain(
   const d = domain.toLowerCase();
   await execute(
     serverId,
-    `UPDATE domain SET
-       mailboxes = (SELECT COUNT(*) FROM mailbox WHERE domain = ${q(d)} AND active = 1),
-       aliases   = (SELECT COUNT(*) FROM forwardings WHERE domain = ${q(d)} AND is_alias = 1 AND active = 1),
+    sql`UPDATE domain SET
+       mailboxes = (SELECT COUNT(*) FROM mailbox WHERE domain = ${d} AND active = 1),
+       aliases   = (SELECT COUNT(*) FROM forwardings WHERE domain = ${d} AND is_alias = 1 AND active = 1),
        modified  = NOW()
-     WHERE domain = ${q(d)}`,
+     WHERE domain = ${d}`,
   );
 }
 

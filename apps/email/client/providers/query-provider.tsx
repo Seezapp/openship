@@ -83,6 +83,7 @@ const getQueryClient = (connectionId: string | null) => {
 };
 
 import { TRPC_URL } from '@/lib/backend-url';
+import { isSafeRelativePath } from '@/lib/safe-url';
 
 const getUrl = () => TRPC_URL;
 
@@ -100,7 +101,8 @@ export const trpcClient = createTRPCClient<AppRouter>({
         fetch(url, { ...options, credentials: 'include' }).then((res) => {
           const currentPath = new URL(window.location.href).pathname;
           const redirectPath = res.headers.get('X-Zero-Redirect');
-          if (!!redirectPath && redirectPath !== currentPath) {
+          // The header names an in-app route; anything that is not a same-origin path is ignored.
+          if (isSafeRelativePath(redirectPath) && redirectPath !== currentPath) {
             window.location.href = redirectPath;
             res.headers.delete('X-Zero-Redirect');
           }

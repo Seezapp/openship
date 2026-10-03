@@ -16,6 +16,10 @@
     "./scale": {
       "types": "./src/scale/index.ts",
       "import": "./src/scale/index.ts"
+    },
+    "./safe-path": {
+      "types": "./src/safe-path.ts",
+      "import": "./src/safe-path.ts"
     }
   },
   "//typesVersions": "Electron main (apps/desktop) emits CommonJS, so it is stuck on classic moduleResolution, which predates `exports` maps and cannot see the ./ports subpath. This is how that resolver finds it; modern consumers use `exports` above.",
@@ -26,6 +30,9 @@
       ],
       "scale": [
         "./src/scale/index.ts"
+      ],
+      "safe-path": [
+        "./src/safe-path.ts"
       ]
     }
   },

@@ -20,6 +20,7 @@
 import { readdirSync, readFileSync, statSync, existsSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveWithin } from "@repo/core/safe-path";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CATALOG_DIR = join(HERE, "..", "src", "system", "modules", "catalog");
@@ -28,7 +29,7 @@ const OUT = join(HERE, "..", "src", "system", "modules", "catalog-embedded.ts");
 function walk(dir: string): string[] {
   const out: string[] = [];
   for (const name of readdirSync(dir)) {
-    const p = join(dir, name);
+    const p = resolveWithin(dir, name);
     if (statSync(p).isDirectory()) out.push(...walk(p));
     else out.push(p);
   }

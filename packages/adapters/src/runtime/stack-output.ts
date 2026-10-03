@@ -12,6 +12,7 @@
 
 import { join, posix as pathPosix } from "node:path";
 import type { StackId } from "@repo/core";
+import { resolveWithin } from "@repo/core/safe-path";
 import { prepareNextStandalone, type NextStandalonePlan } from "./nextjs-standalone";
 
 /** A self-contained build output: ship `bundleDir` as-is; run `startCommand`. */
@@ -46,7 +47,7 @@ export async function prepareStackOutput(
  */
 export function resolveProjectDir(buildDir: string, rootDirectory?: string): string {
   const normalized = rootDirectory?.trim().replace(/^\/+|\/+$/g, "");
-  return normalized ? join(buildDir, normalized) : buildDir;
+  return normalized ? resolveWithin(buildDir, normalized) : buildDir;
 }
 
 /**

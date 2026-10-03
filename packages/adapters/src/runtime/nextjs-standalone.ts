@@ -18,7 +18,7 @@
  */
 
 import { cp, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { resolveWithin } from "@repo/core/safe-path";
 
 export interface NextStandalonePlan {
   /** Absolute dir to ship WHOLESALE (self-contained, incl. traced node_modules). */
@@ -44,16 +44,16 @@ async function exists(p: string): Promise<boolean> {
 export async function prepareNextStandalone(
   projectDir: string,
 ): Promise<NextStandalonePlan | null> {
-  const bundleDir = join(projectDir, ".next", "standalone");
-  if (!(await exists(join(bundleDir, "server.js")))) return null;
+  const bundleDir = resolveWithin(projectDir, ".next", "standalone");
+  if (!(await exists(resolveWithin(bundleDir, "server.js")))) return null;
 
-  const staticSrc = join(projectDir, ".next", "static");
+  const staticSrc = resolveWithin(projectDir, ".next", "static");
   if (await exists(staticSrc)) {
-    await cp(staticSrc, join(bundleDir, ".next", "static"), { recursive: true });
+    await cp(staticSrc, resolveWithin(bundleDir, ".next", "static"), { recursive: true });
   }
-  const publicSrc = join(projectDir, "public");
+  const publicSrc = resolveWithin(projectDir, "public");
   if (await exists(publicSrc)) {
-    await cp(publicSrc, join(bundleDir, "public"), { recursive: true });
+    await cp(publicSrc, resolveWithin(bundleDir, "public"), { recursive: true });
   }
 
   return { bundleDir, startCommand: "node server.js" };

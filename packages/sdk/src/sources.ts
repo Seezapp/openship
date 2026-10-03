@@ -1,6 +1,7 @@
 /** Remote source transport. Shared operations own scanning, project creation and deployment. */
 import { createReadStream, existsSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename } from "node:path";
+import { resolveWithin } from "@repo/core/safe-path";
 import { Readable } from "node:stream";
 import { prepareSourceDirectory, archiveSourceDirectory, assertSourceStagingOutside } from "@repo/platform/source-files";
 import type { StageSourceInput, StagedSource } from "@repo/contracts";
@@ -8,17 +9,17 @@ import type { HttpClient } from "./http";
 import { requestSourceSession } from "./source-client";
 
 function detectPackageManager(dir: string): string | undefined {
-  if (existsSync(join(dir, "bun.lockb")) || existsSync(join(dir, "bun.lock"))) return "bun";
-  if (existsSync(join(dir, "pnpm-lock.yaml"))) return "pnpm";
-  if (existsSync(join(dir, "yarn.lock"))) return "yarn";
-  if (existsSync(join(dir, "package.json"))) return "npm";
+  if (existsSync(resolveWithin(dir, "bun.lockb")) || existsSync(resolveWithin(dir, "bun.lock"))) return "bun";
+  if (existsSync(resolveWithin(dir, "pnpm-lock.yaml"))) return "pnpm";
+  if (existsSync(resolveWithin(dir, "yarn.lock"))) return "yarn";
+  if (existsSync(resolveWithin(dir, "package.json"))) return "npm";
   return undefined;
 }
 function detectStack(dir: string): string | undefined {
-  if (existsSync(join(dir, "go.mod"))) return "go";
-  if (existsSync(join(dir, "Cargo.toml"))) return "rust";
-  if (existsSync(join(dir, "requirements.txt")) || existsSync(join(dir, "pyproject.toml"))) return "python";
-  if (existsSync(join(dir, "package.json"))) return "node";
+  if (existsSync(resolveWithin(dir, "go.mod"))) return "go";
+  if (existsSync(resolveWithin(dir, "Cargo.toml"))) return "rust";
+  if (existsSync(resolveWithin(dir, "requirements.txt")) || existsSync(resolveWithin(dir, "pyproject.toml"))) return "python";
+  if (existsSync(resolveWithin(dir, "package.json"))) return "node";
   return undefined;
 }
 

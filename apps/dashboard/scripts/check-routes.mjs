@@ -39,7 +39,9 @@ export function expectedRouteKeys(appDir = defaultAppDir()) {
   const keys = [];
   const walk = (dir) => {
     for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-      const p = path.join(dir, e.name);
+      const p = path.resolve(dir, e.name);
+      // A directory entry names something IN that directory; anything else is not a route.
+      if (path.dirname(p) !== path.resolve(dir)) continue;
       if (e.isDirectory()) {
         walk(p);
         continue;
@@ -57,7 +59,8 @@ export function expectedRouteKeys(appDir = defaultAppDir()) {
  *  synthetic entries (`/_not-found/page`, `/_global-error/page`) that no source
  *  file declares, and an EXTRA route is never the failure we are hunting. */
 export function missingRoutes(manifestPath, appDir = defaultAppDir()) {
-  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  // The manifest is wherever the caller says it is (a build dir, a file pulled from an image).
+  const manifest = JSON.parse(fs.readFileSync(path.resolve(manifestPath), "utf8"));
   const present = new Set(Object.keys(manifest));
   const expected = expectedRouteKeys(appDir);
   return { expected, total: present.size, missing: expected.filter((k) => !present.has(k)) };

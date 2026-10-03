@@ -6,6 +6,7 @@ import { api, getApiBaseUrl } from "@/lib/api";
 import { buildDesktopAuthorizeUrl, preparePkceFlow, startDesktopCloudAuth } from "@/lib/cloud-auth";
 import type { OnboardingState } from "@repo/onboarding";
 import type { Dictionary } from "@/i18n";
+import { isHttpUrl } from "@/utils/safe-url";
 
 export type LoadingStatus = {
   title: string;
@@ -76,6 +77,13 @@ async function runCloudFlow(
     message: labels.newTabSignIn,
   });
   const cloudLoginUrl = await getCloudLoginUrl(cloudAuthUrl);
+  // `cloudAuthUrl` is configuration; refuse to open anything but an http(s) page.
+  if (!isHttpUrl(cloudLoginUrl)) {
+    return {
+      ok: false,
+      status: { title: labels.couldNotStartAuthTitle, message: labels.couldNotStartAuthMsg },
+    };
+  }
   window.open(cloudLoginUrl, "_blank");
   return { ok: true };
 }

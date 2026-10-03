@@ -22,7 +22,8 @@
  */
 
 import { sshManager } from "../../../lib/ssh-manager";
-import { execute, queryOne, queryRows, q, qInt, transaction } from "./psql-runner";
+import { execute, queryOne, queryRows, transaction } from "./psql-runner";
+import { sql, sqlJoin, sqlRaw, type SqlQuery } from "./sql";
 import { hashPassword } from "./password";
 import {
   createMaildirOnDisk,
@@ -60,7 +61,7 @@ export interface MailboxRow {
   isPlatform: boolean;
 }
 
-const SELECT_COLUMNS = `
+const SELECT_COLUMNS = sqlRaw(`
   username,
   name,
   domain,
@@ -73,7 +74,7 @@ const SELECT_COLUMNS = `
   (isglobaladmin = 1) AS "isGlobalAdmin",
   created::text AS "createdAt",
   passwordlastchange::text AS "passwordLastChange"
-`;
+`);
 
 export interface CreateMailboxInput {
   /** Local-part only - domain is supplied separately. */
@@ -125,8 +126,8 @@ function validateQuotaMB(quota: number): void {
  * Validate a free-form display name at the API boundary (defense-in-depth).
  * A display name is DATA — reject control characters (newlines/CR/NUL/…) that
  * have no legitimate place in a name and are the vehicle for injection, and cap
- * the length. The SQL sink is already safe (q() + a single shell-quoted `-c`
- * arg); this is a second layer so bad input never even reaches it.
+ * the length. The SQL sink is already safe (the value is a bound parameter,
+ * never statement text); this is a second layer so bad input never even reaches it.
  */
 function validateDisplayName(name: string): void {
   if (name.length > 255) {
@@ -151,7 +152,7 @@ export async function listMailboxes(
   return sshManager.withExecutor(serverId, async (exec) => {
     const rows = await queryRows<Omit<MailboxRow, "isPlatform">>(
       exec,
-      `SELECT${SELECT_COLUMNS} FROM mailbox WHERE domain = ${q(domain.toLowerCase())} ORDER BY username`,
+      sql`SELECT${SELECT_COLUMNS} FROM mailbox WHERE domain = ${domain.toLowerCase()} ORDER BY username`,
     );
     const state = await readState(exec);
     return rows.map((row) => annotatePlatformMailbox(row, state?.domain));
@@ -163,7 +164,7 @@ export async function getMailbox(serverId: string, email: string): Promise<Mailb
   return sshManager.withExecutor(serverId, async (exec) => {
     const row = await queryOne<Omit<MailboxRow, "isPlatform">>(
       exec,
-      `SELECT${SELECT_COLUMNS} FROM mailbox WHERE username = ${q(username)}`,
+      sql`SELECT${SELECT_COLUMNS} FROM mailbox WHERE username = ${username}`,
     );
     if (!row) return null;
     const state = await readState(exec);
@@ -263,10 +264,10 @@ export async function createMailbox(
       // most likely cause is "no write access to /var/vmail" which means
       // the install is broken regardless, and the DB rollback should still
       // work.
-      await execute(exec, `DELETE FROM mailbox WHERE username = ${q(username)};`);
+      await execute(exec, sql`DELETE FROM mailbox WHERE username = ${username};`);
       await execute(
         exec,
-        `DELETE FROM forwardings WHERE address = ${q(username)} AND forwarding = ${q(username)};`,
+        sql`DELETE FROM forwardings WHERE address = ${username} AND forwarding = ${username};`,
       );
       throw new Error(
         `Failed to create Maildir; mailbox was rolled back: ${safeErrorMessage(err)}`,
@@ -294,30 +295,30 @@ export async function updateMailbox(
   assertMailboxIsUserManaged(existing);
 
   await sshManager.withExecutor(serverId, async (exec) => {
-    const sets: string[] = ["modified = NOW()"];
+    const sets: SqlQuery[] = [sql`modified = NOW()`];
 
     if (patch.name !== undefined) {
       validateDisplayName(patch.name);
-      sets.push(`name = ${q(patch.name)}`);
+      sets.push(sql`name = ${patch.name}`);
     }
     if (patch.quotaMB !== undefined) {
       validateQuotaMB(patch.quotaMB);
-      sets.push(`quota = ${qInt(patch.quotaMB)}`);
+      sets.push(sql`quota = ${patch.quotaMB}`);
     }
     if (patch.active !== undefined) {
-      sets.push(`active = ${patch.active ? 1 : 0}`);
+      sets.push(sql`active = ${patch.active ? 1 : 0}`);
     }
     if (patch.password) {
       if (patch.password.length < 8) {
         throw new Error("Password must be at least 8 characters.");
       }
       const hash = await hashPassword(exec, patch.password);
-      sets.push(`password = ${q(hash)}`);
-      sets.push("passwordlastchange = NOW()");
+      sets.push(sql`password = ${hash}`);
+      sets.push(sql`passwordlastchange = NOW()`);
     }
 
     if (sets.length > 1) {
-      await execute(exec, `UPDATE mailbox SET ${sets.join(", ")} WHERE username = ${q(username)}`);
+      await execute(exec, sql`UPDATE mailbox SET ${sqlJoin(sets, ", ")} WHERE username = ${username}`);
     }
 
     // Mirror active flag on the forwardings row so Postfix stops accepting
@@ -325,8 +326,8 @@ export async function updateMailbox(
     if (patch.active !== undefined) {
       await execute(
         exec,
-        `UPDATE forwardings SET active = ${patch.active ? 1 : 0}
-           WHERE address = ${q(username)} AND forwarding = ${q(username)}`,
+        sql`UPDATE forwardings SET active = ${patch.active ? 1 : 0}
+           WHERE address = ${username} AND forwarding = ${username}`,
       );
       await recountDomain(serverId, existing.domain);
     }
@@ -358,15 +359,15 @@ export async function softDeleteMailbox(
 
   await sshManager.withExecutor(serverId, async (exec) => {
     await transaction(exec, [
-      `UPDATE mailbox SET active = 0, modified = NOW() WHERE username = ${q(username)}`,
-      `UPDATE forwardings SET active = 0 WHERE address = ${q(username)} AND forwarding = ${q(username)}`,
-      `INSERT INTO deleted_mailboxes (
+      sql`UPDATE mailbox SET active = 0, modified = NOW() WHERE username = ${username}`,
+      sql`UPDATE forwardings SET active = 0 WHERE address = ${username} AND forwarding = ${username}`,
+      sql`INSERT INTO deleted_mailboxes (
           username, domain, maildir, admin, delete_date
         ) VALUES (
-          ${q(username)},
-          ${q(existing.domain)},
-          ${q(existing.maildir)},
-          ${q(adminUsername)},
+          ${username},
+          ${existing.domain},
+          ${existing.maildir},
+          ${adminUsername},
           CURRENT_DATE
         )`,
     ]);
@@ -401,11 +402,11 @@ export async function hardDeleteMailbox(serverId: string, email: string): Promis
     }
 
     await transaction(exec, [
-      `DELETE FROM forwardings WHERE address = ${q(username)} OR forwarding = ${q(username)}`,
-      `DELETE FROM used_quota WHERE username = ${q(username)}`,
-      `DELETE FROM last_login WHERE username = ${q(username)}`,
-      `DELETE FROM deleted_mailboxes WHERE username = ${q(username)}`,
-      `DELETE FROM mailbox WHERE username = ${q(username)}`,
+      sql`DELETE FROM forwardings WHERE address = ${username} OR forwarding = ${username}`,
+      sql`DELETE FROM used_quota WHERE username = ${username}`,
+      sql`DELETE FROM last_login WHERE username = ${username}`,
+      sql`DELETE FROM deleted_mailboxes WHERE username = ${username}`,
+      sql`DELETE FROM mailbox WHERE username = ${username}`,
     ]);
     try {
       await removeMaildirOnDisk(exec, {

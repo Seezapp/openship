@@ -1,6 +1,7 @@
 import type { ChangelogEntry, ChangelogSection } from "@/lib/changelog";
 import { ShareButton } from "./share-button";
 import { ChangelogControls } from "./changelog-controls";
+import { ChangelogInlineMarkdown, ChangelogMarkdown } from "./changelog-markdown";
 
 export type Entry = ChangelogEntry;
 
@@ -42,39 +43,37 @@ function Section({ section }: { section: ChangelogSection }) {
       {section.items.length > 0 ? (
         <ul className="cl-items">
           {section.items.map((item) =>
-            item.detailHtml ? (
-              <li className="cl-item" key={item.title}>
+            item.detailMd ? (
+              <li className="cl-item" key={item.titleMd}>
                 <details className="cl-item-details">
                   <summary className="cl-item-sum">
                     <Chevron className="cl-chev cl-chev--item" />
-                    <span
-                      className="cl-item-title"
-                      dangerouslySetInnerHTML={{ __html: item.title }}
-                    />
+                    <span className="cl-item-title">
+                      <ChangelogInlineMarkdown source={item.titleMd} />
+                    </span>
                   </summary>
-                  <div
-                    className="cl-item-detail changelog-prose"
-                    dangerouslySetInnerHTML={{ __html: item.detailHtml }}
-                  />
+                  <div className="cl-item-detail changelog-prose">
+                    <ChangelogMarkdown source={item.detailMd} capitalize />
+                  </div>
                 </details>
               </li>
             ) : (
               // A one-liner has nothing to open — render it flat, not as a dead toggle.
-              <li className="cl-item cl-item--flat" key={item.title}>
+              <li className="cl-item cl-item--flat" key={item.titleMd}>
                 <span className="cl-dot" aria-hidden="true" />
-                <span className="cl-item-title" dangerouslySetInnerHTML={{ __html: item.title }} />
+                <span className="cl-item-title">
+                  <ChangelogInlineMarkdown source={item.titleMd} />
+                </span>
               </li>
             ),
           )}
         </ul>
       ) : null}
 
-      {section.notesHtml.map((note) => (
-        <div
-          key={note}
-          className="cl-note changelog-prose"
-          dangerouslySetInnerHTML={{ __html: note }}
-        />
+      {section.notesMd.map((note) => (
+        <div key={note} className="cl-note changelog-prose">
+          <ChangelogMarkdown source={note} />
+        </div>
       ))}
     </section>
   );
@@ -146,11 +145,10 @@ export function ChangelogEntries({
               <div className="cl-version-body">
                 {/* On /changelog/<slug> the page header already carries this entry's
                     lead paragraph — don't print it twice. */}
-                {entry.leadHtml && !highlighted ? (
-                  <div
-                    className="cl-lead changelog-prose"
-                    dangerouslySetInnerHTML={{ __html: entry.leadHtml }}
-                  />
+                {entry.leadMd && !highlighted ? (
+                  <div className="cl-lead changelog-prose">
+                    <ChangelogMarkdown source={entry.leadMd} />
+                  </div>
                 ) : null}
                 {entry.sections.map((section) => (
                   <Section key={section.title || "intro"} section={section} />

@@ -29,7 +29,8 @@
 // was consolidated. Every value interpolated into a command on this path reaches root on a
 // host-networked, NET_ADMIN container, so it should be the audited one.
 import { safeErrorMessage } from "@repo/core";
-import { execute, q, queryOne, transaction } from "@repo/platform/engine/modules/mail/admin/psql-runner";
+import { execute, queryOne, transaction } from "@repo/platform/engine/modules/mail/admin/psql-runner";
+import { sql } from "@repo/platform/engine/modules/mail/admin/sql";
 import { hashPassword } from "@repo/platform/engine/modules/mail/admin/password";
 import { createMaildirOnDisk, generateMaildir, STORAGE_BASE, STORAGE_NODE } from "@repo/platform/engine/modules/mail/admin/maildir";
 import {
@@ -106,12 +107,12 @@ export async function readArmedState(target: MailTarget, domain: string): Promis
   const d = domain.toLowerCase();
   const bcc = await queryOne<{ bcc_address: string }>(
     target,
-    `SELECT bcc_address FROM recipient_bcc_domain WHERE domain = ${q(d)} AND active = 1`,
+    sql`SELECT bcc_address FROM recipient_bcc_domain WHERE domain = ${d} AND active = 1`,
   );
   const box = await queryOne<{ base: string; node: string; maildir: string }>(
     target,
-    `SELECT storagebasedirectory AS base, storagenode AS node, maildir
-       FROM mailbox WHERE username = ${q(collectorMailbox(d))}`,
+    sql`SELECT storagebasedirectory AS base, storagenode AS node, maildir
+       FROM mailbox WHERE username = ${collectorMailbox(d)}`,
   );
   const token = tokenFromBcc(bcc?.bcc_address);
   return {
@@ -166,8 +167,8 @@ export async function ensureCollectorMailbox(
 
   const existing = await queryOne<{ base: string; node: string; maildir: string }>(
     target,
-    `SELECT storagebasedirectory AS base, storagenode AS node, maildir
-       FROM mailbox WHERE username = ${q(username)}`,
+    sql`SELECT storagebasedirectory AS base, storagenode AS node, maildir
+       FROM mailbox WHERE username = ${username}`,
   );
   if (existing) {
     return { username, maildirPath: `${existing.base}/${existing.node}/${existing.maildir}` };
@@ -197,8 +198,8 @@ export async function ensureCollectorMailbox(
   } catch (err) {
     // Same compensating rollback as createMailbox: leaving the rows behind would make
     // Postfix accept mail for an address whose storage does not exist, which bounces.
-    await execute(target, `DELETE FROM forwardings WHERE address = ${q(username)}`).catch(() => {});
-    await execute(target, `DELETE FROM mailbox WHERE username = ${q(username)}`).catch(() => {});
+    await execute(target, sql`DELETE FROM forwardings WHERE address = ${username}`).catch(() => {});
+    await execute(target, sql`DELETE FROM mailbox WHERE username = ${username}`).catch(() => {});
     throw new Error(
       `Could not create the collector maildir for ${d}: ${safeErrorMessage(err)}`,
     );
@@ -232,8 +233,8 @@ export async function armDomain(target: MailTarget, domain: string): Promise<str
   const token = generateToken();
   await execute(
     target,
-    `INSERT INTO recipient_bcc_domain (domain, bcc_address, active)
-       VALUES (${q(d)}, ${q(collectorAddress(d, token))}, 1)
+    sql`INSERT INTO recipient_bcc_domain (domain, bcc_address, active)
+       VALUES (${d}, ${collectorAddress(d, token)}, 1)
      ON CONFLICT (domain) DO UPDATE SET
        bcc_address = EXCLUDED.bcc_address, active = 1, modified = NOW()`,
   );
@@ -253,8 +254,8 @@ export async function disarmDomain(target: MailTarget, domain: string): Promise<
   if (!state.token) return;
   await execute(
     target,
-    `DELETE FROM recipient_bcc_domain
-       WHERE domain = ${q(d)} AND bcc_address LIKE ${q(`${COLLECTOR_PREFIX}%`)}`,
+    sql`DELETE FROM recipient_bcc_domain
+       WHERE domain = ${d} AND bcc_address LIKE ${`${COLLECTOR_PREFIX}%`}`,
   );
 }
 
@@ -285,7 +286,7 @@ export function ruleDomain(rule: {
 export async function listEngineDomains(target: MailTarget): Promise<string[]> {
   const rows = await queryOne<{ domains: string | null }>(
     target,
-    `SELECT string_agg(domain, ',' ORDER BY domain) AS domains FROM domain WHERE active = 1`,
+    sql`SELECT string_agg(domain, ',' ORDER BY domain) AS domains FROM domain WHERE active = 1`,
   );
   return (rows?.domains ?? "").split(",").filter(Boolean);
 }

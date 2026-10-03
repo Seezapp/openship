@@ -58,6 +58,7 @@ import {
 import { AppError } from "@repo/core";
 
 import { sshManager } from "../../lib/ssh-manager";
+import { sqlBindings, type SqlQuery } from "./admin/sql";
 
 export type { MailEngineFlavor, MailEngineProbe };
 
@@ -390,7 +391,7 @@ export async function runMailCommand(
  * case where no SQL ran, and one the classifier never sees because that gate throws a
  * typed error.
  */
-export async function runMailSql(target: MailTarget, sql: string): Promise<string> {
+export async function runMailSql(target: MailTarget, sql: string | SqlQuery): Promise<string> {
   let flavor: MailEngineFlavor = "none";
   try {
     const { output } = await runMailCommand(target, (resolved) => {
@@ -492,19 +493,45 @@ function sq(value: string): string {
 /**
  * psql against the `vmail` database.
  *
- * Same database name, same flags, same single shell-quoted `-c` argv on both
- * flavors — only the transport differs. `-A -t` strips headers/alignment;
- * `ON_ERROR_STOP=1` fails loud so `execute()` throws instead of silently
- * half-applying. NEVER a heredoc: a fixed delimiter lets a value containing that
- * delimiter close it early and turn the rest into shell commands.
+ * Same database name and flags on both flavors — only the transport differs.
+ * `-A -t` strips headers/alignment; `ON_ERROR_STOP=1` fails loud so `execute()`
+ * throws instead of silently half-applying. NEVER a heredoc: a fixed delimiter
+ * lets a value containing that delimiter close it early and turn the rest into
+ * shell commands.
+ *
+ * A `SqlQuery` (see `admin/sql.ts`) is run with BOUND PARAMETERS: the statement
+ * text carries only `:'vN'` references and goes to psql on stdin, each value is
+ * its own shell-quoted `-v vN=…` argv, and psql substitutes the reference as a
+ * correctly escaped literal. Stdin rather than `-c` because psql does not
+ * interpolate variables in `-c` commands. `-X` skips psqlrc (which `-c` never
+ * read), and `-1` keeps the single-transaction behaviour a multi-statement `-c`
+ * string has — with ON_ERROR_STOP a failure exits before COMMIT, so the block
+ * rolls back.
+ *
+ * A plain string is the legacy path: one shell-quoted `-c` argv, values inlined
+ * by the caller with `q()`.
  */
-export function mailPsqlCommand(flavor: MailEngineFlavor, sql: string): string {
-  const flags = `-d ${MAIL_DB_NAME} -A -t -v ON_ERROR_STOP=1 -c ${sq(sql)}`;
-  // Container: connect as the sidecar's `postgres` superuser (the container-model
-  // equivalent of `sudo -u postgres`, which is exactly what legacy boxes use).
-  return flavor === "container"
-    ? `docker exec ${MAIL_DB_CONTAINER} psql -U postgres ${flags}`
-    : `sudo -u postgres psql ${flags}`;
+export function mailPsqlCommand(flavor: MailEngineFlavor, sql: string | SqlQuery): string {
+  const base = `-d ${MAIL_DB_NAME} -A -t -v ON_ERROR_STOP=1`;
+  if (typeof sql === "string") {
+    const flags = `${base} -c ${sq(sql)}`;
+    // Container: connect as the sidecar's `postgres` superuser (the container-model
+    // equivalent of `sudo -u postgres`, which is exactly what legacy boxes use).
+    return flavor === "container"
+      ? `docker exec ${MAIL_DB_CONTAINER} psql -U postgres ${flags}`
+      : `sudo -u postgres psql ${flags}`;
+  }
+
+  const binds = Object.entries(sqlBindings(sql))
+    .map(([name, value]) => ` -v ${sq(`${name}=${value}`)}`)
+    .join("");
+  const flags = `${base} -X -1${binds}`;
+  // `-i` so docker forwards the piped statement to psql's stdin.
+  const psql =
+    flavor === "container"
+      ? `docker exec -i ${MAIL_DB_CONTAINER} psql -U postgres ${flags}`
+      : `sudo -u postgres psql ${flags}`;
+  return `printf '%s' ${sq(sql.text)} | ${psql}`;
 }
 
 /**

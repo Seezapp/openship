@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, sep } from "node:path";
 
 import ignore from "ignore";
+import { isWithin, resolveWithin } from "@repo/core/safe-path";
 
 import type { BuildConfig, LogCallback } from "../types";
 
@@ -154,7 +155,7 @@ function anchorDockerignorePattern(line: string): string {
  */
 async function loadDockerignoreMatcher(rootPath: string): Promise<IgnoreMatcher | undefined> {
   try {
-    const contents = await readFile(join(rootPath, ".dockerignore"), "utf-8");
+    const contents = await readFile(resolveWithin(rootPath, ".dockerignore"), "utf-8");
     return ignore().add(contents.split(/\r?\n/).map(anchorDockerignorePattern));
   } catch {
     return undefined; // no .dockerignore
@@ -364,7 +365,10 @@ async function materializeLocalSource(
  *  posix paths and are probed in priority order. */
 async function firstExistingCandidate(dir: string, candidates: string[]): Promise<string | null> {
   for (const candidate of candidates) {
-    const candidatePath = join(dir, ...candidate.split("/"));
+    // A candidate carries the configured Dockerfile path; one that resolves
+    // outside `dir` is not "inside" it, so it is never probed.
+    if (!isWithin(dir, ...candidate.split("/"))) continue;
+    const candidatePath = resolveWithin(dir, ...candidate.split("/"));
     const exists = await access(candidatePath)
       .then(() => true)
       .catch(() => false);
@@ -680,7 +684,7 @@ export async function resolveServiceDockerfile(
 
   if (!hasRepositoryDockerfile) {
     await writeFile(
-      join(contextDir, generatedName),
+      resolveWithin(contextDir, generatedName),
       generateDockerfile({
         ...config,
         rootDirectory: resolvedRootDirectory,
@@ -695,7 +699,7 @@ export async function resolveServiceDockerfile(
   // failure here must not fail the build — the builder choice is an optimization,
   // and the build itself is about to read the same file.
   const requiresBuildKit = hasRepositoryDockerfile
-    ? await readFile(join(buildContextDir, ...dockerfileName.split("/")), "utf-8")
+    ? await readFile(resolveWithin(buildContextDir, ...dockerfileName.split("/")), "utf-8")
         .then(dockerfileNeedsBuildKit)
         .catch(() => false)
     : false;

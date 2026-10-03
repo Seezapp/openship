@@ -12,6 +12,8 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { resolveWithin } from "@repo/core/safe-path";
+
 import { DEFAULT_REPO, has, run, shortSha } from "./from-source";
 import { OS_DIR } from "./paths";
 
@@ -74,7 +76,7 @@ export async function rebuildFromSource(info: SourceInstall): Promise<string> {
   if (!has("git")) {
     throw new Error("`git` is required to update the source checkout but wasn't found on PATH.");
   }
-  if (!existsSync(join(info.dir, ".git"))) {
+  if (!existsSync(resolveWithin(info.dir, ".git"))) {
     throw new Error(
       `Source checkout ${info.dir} is missing (no .git) — reinstall from source with scripts/install-source.sh.`,
     );
@@ -85,7 +87,7 @@ export async function rebuildFromSource(info: SourceInstall): Promise<string> {
   // Fast-forward a branch; a pinned tag/sha stays put (best-effort).
   await run("git", ["pull", "--ff-only", "origin", info.ref], info.dir).catch(() => {});
 
-  const cliDir = join(info.dir, "apps/cli");
+  const cliDir = resolveWithin(info.dir, "apps/cli");
   await run("bun", ["install"], info.dir);
   await run("bun", ["run", "build"], cliDir); // tsup + build/stage-server.ts
   await run("bun", ["run", "build/stage-dashboard.ts"], cliDir);

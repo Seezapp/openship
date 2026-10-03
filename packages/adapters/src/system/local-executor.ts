@@ -1,4 +1,4 @@
-import { exec, spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import {
   access,
   mkdir as fsMkdir,
@@ -9,6 +9,8 @@ import {
   writeFile as fsWriteFile,
 } from "node:fs/promises";
 import { dirname } from "node:path";
+
+import { normalizeLocalPath } from "@repo/core/safe-path";
 
 import type { CommandExecutor, LogEntry } from "../types";
 import {
@@ -26,12 +28,19 @@ import {
 export class LocalExecutor implements CommandExecutor {
   async exec(command: string, opts?: { timeout?: number }): Promise<string> {
     return new Promise((resolve, reject) => {
-      const shell = getLocalShellPath();
-      exec(
-        command,
+      if (typeof command !== "string" || command.includes("\0")) {
+        reject(new Error("Refusing to run a malformed local command"));
+        return;
+      }
+      // The contract IS a shell command line (callers pass pipelines, redirects,
+      // `&&` chains, quoting every interpolated value with sq()), so a shell is
+      // required. It is invoked explicitly, with the command as ONE argv entry —
+      // exactly what `exec(command, { shell })` ran, minus the implicit spawn.
+      execFile(
+        getLocalShellPath(),
+        ["-c", command],
         {
           timeout: opts?.timeout ?? 30_000,
-          shell,
           env: getLocalExecEnv(),
         },
         (err, stdout, stderr) => {
@@ -132,7 +141,8 @@ export class LocalExecutor implements CommandExecutor {
     });
   }
 
-  async writeFile(path: string, content: string, opts?: { mode?: number }): Promise<void> {
+  async writeFile(target: string, content: string, opts?: { mode?: number }): Promise<void> {
+    const path = normalizeLocalPath(target);
     await fsMkdir(dirname(path), { recursive: true });
     if (opts?.mode === undefined) {
       await fsWriteFile(path, content, "utf-8");
@@ -152,16 +162,16 @@ export class LocalExecutor implements CommandExecutor {
   }
 
   async rename(from: string, to: string): Promise<void> {
-    await fsRename(from, to);
+    await fsRename(normalizeLocalPath(from), normalizeLocalPath(to));
   }
 
   async readFile(path: string): Promise<string> {
-    return fsReadFile(path, "utf-8");
+    return fsReadFile(normalizeLocalPath(path), "utf-8");
   }
 
   async exists(path: string): Promise<boolean> {
     try {
-      await access(path);
+      await access(normalizeLocalPath(path));
       return true;
     } catch {
       return false;
@@ -169,12 +179,12 @@ export class LocalExecutor implements CommandExecutor {
   }
 
   async mkdir(path: string): Promise<void> {
-    await fsMkdir(path, { recursive: true });
+    await fsMkdir(normalizeLocalPath(path), { recursive: true });
   }
 
   async rm(path: string): Promise<void> {
     try {
-      await fsRm(path, { recursive: true, force: true });
+      await fsRm(normalizeLocalPath(path), { recursive: true, force: true });
     } catch {
       // Already gone
     }

@@ -47,7 +47,8 @@ import {
   type MailServerState,
   type PlatformMailboxState,
 } from "../mail-state";
-import { execute, q, qInt, queryOne, transaction } from "./psql-runner";
+import { execute, queryOne, transaction } from "./psql-runner";
+import { sql, type SqlQuery } from "./sql";
 import { hashPassword } from "./password";
 import {
   createMaildirOnDisk,
@@ -200,15 +201,15 @@ export async function isManagedMailboxUsable(
     forwardingActive: boolean;
   }>(
     exec,
-    `SELECT
+    sql`SELECT
        EXISTS (
          SELECT 1 FROM mailbox
-         WHERE username = ${q(email)} AND active = 1
+         WHERE username = ${email} AND active = 1
        ) AS "mailboxActive",
        EXISTS (
          SELECT 1 FROM forwardings
-         WHERE address = ${q(email)}
-           AND forwarding = ${q(email)}
+         WHERE address = ${email}
+           AND forwarding = ${email}
            AND active = 1
        ) AS "forwardingActive"`,
   );
@@ -306,10 +307,10 @@ export async function rollbackMailbox(
   email: string,
   layout?: { storagebasedirectory: string; storagenode: string; maildir: string },
 ): Promise<void> {
-  await execute(exec, `DELETE FROM forwardings WHERE address = ${q(email)} OR forwarding = ${q(email)};`).catch(
+  await execute(exec, sql`DELETE FROM forwardings WHERE address = ${email} OR forwarding = ${email};`).catch(
     () => {},
   );
-  await execute(exec, `DELETE FROM mailbox WHERE username = ${q(email)};`).catch(() => {});
+  await execute(exec, sql`DELETE FROM mailbox WHERE username = ${email};`).catch(() => {});
   if (layout) {
     await removeMaildirOnDisk(exec, layout).catch(() => {});
   }
@@ -378,10 +379,10 @@ export interface BuildMailboxSqlOptions {
 export function buildMailboxSql(
   f: MailboxFields,
   opts?: BuildMailboxSqlOptions,
-): string {
+): SqlQuery {
   const mode = opts?.mode ?? "upsert";
   const quotaMB = f.quotaMB ?? 0;
-  const base = `INSERT INTO mailbox (
+  const base = sql`INSERT INTO mailbox (
       username, password, name, domain, quota,
       storagebasedirectory, storagenode, maildir,
       mailboxformat, mailboxfolder,
@@ -395,14 +396,14 @@ export function buildMailboxSql(
       active, isadmin, isglobaladmin,
       created, modified, passwordlastchange
     ) VALUES (
-      ${q(f.username)},
-      ${q(f.passwordHash)},
-      ${q(f.name)},
-      ${q(f.domain)},
-      ${qInt(quotaMB)},
-      ${q(f.storagebasedirectory)},
-      ${q(f.storagenode)},
-      ${q(f.maildir)},
+      ${f.username},
+      ${f.passwordHash},
+      ${f.name},
+      ${f.domain},
+      ${quotaMB},
+      ${f.storagebasedirectory},
+      ${f.storagenode},
+      ${f.maildir},
       'maildir', 'Maildir',
       1, 1,
       1, 1, 1,
@@ -415,7 +416,7 @@ export function buildMailboxSql(
       NOW(), NOW(), NOW()
     )`;
   if (mode === "insert") return base;
-  return `${base}
+  return sql`${base}
     ON CONFLICT (username) DO UPDATE SET
       password = EXCLUDED.password,
       name = EXCLUDED.name,
@@ -427,12 +428,12 @@ export function buildMailboxSql(
 }
 
 /** Thin wrapper: pure INSERT, no ON CONFLICT. Used by createMailbox. */
-export function buildInsertMailboxSql(f: MailboxFields): string {
+export function buildInsertMailboxSql(f: MailboxFields): SqlQuery {
   return buildMailboxSql(f, { mode: "insert" });
 }
 
 /** Thin wrapper: INSERT ... ON CONFLICT DO UPDATE. Used by ensure* helpers. */
-export function buildUpsertMailboxSql(f: MailboxFields): string {
+export function buildUpsertMailboxSql(f: MailboxFields): SqlQuery {
   return buildMailboxSql(f, { mode: "upsert" });
 }
 
@@ -446,17 +447,17 @@ export function buildSelfForwardingSql(
   username: string,
   domain: string,
   opts?: BuildMailboxSqlOptions,
-): string {
+): SqlQuery {
   const mode = opts?.mode ?? "upsert";
-  const base = `INSERT INTO forwardings (
+  const base = sql`INSERT INTO forwardings (
       address, forwarding, domain, dest_domain,
       is_maillist, is_list, is_forwarding, is_alias, active
     ) VALUES (
-      ${q(username)}, ${q(username)}, ${q(domain)}, ${q(domain)},
+      ${username}, ${username}, ${domain}, ${domain},
       0, 0, 1, 0, 1
     )`;
   if (mode === "insert") return base;
-  return `${base}
+  return sql`${base}
     ON CONFLICT (address, forwarding) DO UPDATE SET
       domain = EXCLUDED.domain,
       dest_domain = EXCLUDED.dest_domain,
@@ -465,12 +466,12 @@ export function buildSelfForwardingSql(
 }
 
 /** Thin wrapper: pure INSERT, no ON CONFLICT. Used by createMailbox. */
-export function buildInsertSelfForwardingSql(username: string, domain: string): string {
+export function buildInsertSelfForwardingSql(username: string, domain: string): SqlQuery {
   return buildSelfForwardingSql(username, domain, { mode: "insert" });
 }
 
 /** Thin wrapper: INSERT ... ON CONFLICT DO UPDATE. Used by ensure* helpers. */
-export function buildUpsertSelfForwardingSql(username: string, domain: string): string {
+export function buildUpsertSelfForwardingSql(username: string, domain: string): SqlQuery {
   return buildSelfForwardingSql(username, domain, { mode: "upsert" });
 }
 

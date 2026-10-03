@@ -84,7 +84,7 @@
     "open": "^10.2.0",
     "ora": "^9.3.0",
     "ssh2": "^1.17.0",
-    "@sinclair/typebox": "^0.34.48"
+    "@sinclair/typebox": "^0.34.52"
   },
   "devDependencies": {
     "tsup": "^8.5.1",

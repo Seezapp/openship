@@ -13,7 +13,7 @@ import { Command } from "commander";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
-import { join } from "node:path";
+import { resolveWithin } from "@repo/core/safe-path";
 import { getShipClient, nativeSession, ApiError } from "../lib/ship-client";
 import { iteratePages } from "@repo/sdk/client";
 import type { ProjectLink } from "../lib/project-link";
@@ -36,8 +36,8 @@ export const initCommand = new Command("init")
   .option("-y, --yes", "Non-interactive: fail instead of prompting")
   .action(async (opts) => {
     const root: string = opts.dir || process.cwd();
-    const linkDir = join(root, ".openship");
-    const linkPath = join(linkDir, "project.json");
+    const linkDir = resolveWithin(root, ".openship");
+    const linkPath = resolveWithin(linkDir, "project.json");
 
     if (existsSync(linkPath) && !opts.force) {
       err(`Already linked (${linkPath}). Re-run with --force to overwrite.`);

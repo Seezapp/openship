@@ -16,6 +16,7 @@ import { Readable, pipeline } from "node:stream";
 import { promisify } from "node:util";
 import { registerDestination } from "../registry";
 import { safeErrorMessage } from "@repo/core";
+import { resolveWithin } from "@repo/core/safe-path";
 import type {
   BackupDestination,
   BackupDestinationRow,
@@ -59,7 +60,7 @@ class LocalDestinationImpl implements BackupDestination {
     // otherwise stop nesting under it — silently, and only for new runs.
     const base = resolve(row.endpoint);
     const prefix = (row.pathPrefix ?? "").replace(/^\/+|\/+$/g, "");
-    this.root = prefix ? resolve(base, prefix) : base;
+    this.root = prefix ? resolveWithin(base, prefix) : base;
     this.legacyRoot = prefix ? base : null;
   }
 
@@ -69,7 +70,7 @@ class LocalDestinationImpl implements BackupDestination {
     if (normalized.startsWith("..") || normalized.includes(`${normalize("../")}`)) {
       throw new Error(`Invalid key (traversal): ${key}`);
     }
-    return join(this.root, normalized);
+    return resolveWithin(this.root, normalized);
   }
 
   /**
@@ -95,7 +96,7 @@ class LocalDestinationImpl implements BackupDestination {
       await fs.access(current);
       return current;
     } catch {
-      const legacy = join(this.legacyRoot, normalize(key));
+      const legacy = resolveWithin(this.legacyRoot, normalize(key));
       try {
         await fs.access(legacy);
         return legacy;

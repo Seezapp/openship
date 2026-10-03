@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { mkdir, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import Redis, { Cluster, type RedisOptions } from "ioredis";
+import { resolveWithin } from "@repo/core/safe-path";
 import type { RedisEndpoint, RedisArchiveManifest } from "./types";
 import type { TaskArchiveStore } from "./files";
 import { databaseCommand as command } from "./command";
@@ -130,7 +131,7 @@ export async function captureRedis(
     };
     for (const [index, primary] of primaries.entries()) {
       store.signal.throwIfAborted();
-      const path = join(directory, `${primary.id}.rdb`);
+      const path = resolveWithin(directory, `${primary.id}.rdb`);
       log(`Saving data partition ${index + 1} of ${primaries.length}.`);
       await command(
         "redis-cli",
@@ -187,7 +188,7 @@ export async function restoreRedis(
   target.on("error", () => {});
   try {
     for (const [index, file] of manifest.files.entries()) {
-      const folder = join(directory, `restore-${index}`);
+      const folder = resolveWithin(directory, `restore-${index}`);
       await mkdir(folder, { mode: 0o700 });
       if (preparedFile && index === 0) await rename(preparedFile, join(folder, "dump.rdb"));
       else await store.download(file, join(folder, "dump.rdb"));

@@ -44,6 +44,7 @@ import { join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { buildMailImageRef } from "@repo/core";
+import { resolveWithin } from "@repo/core/safe-path";
 import { getRemoteClient, ApiError } from "../lib/ship-client";
 import { streamDeploymentLogs } from "../lib/deploy-stream";
 import { getToken } from "../lib/config";
@@ -506,9 +507,9 @@ const DOCKERFILE_REL = join("apps", "email", "Dockerfile");
 function resolveBuildContext(explicit?: string): string | null {
   if (explicit?.trim()) return resolve(explicit.trim());
   const marker = readSourceInstall();
-  if (marker?.dir && existsSync(join(marker.dir, DOCKERFILE_REL))) return marker.dir;
+  if (marker?.dir && existsSync(resolveWithin(marker.dir, DOCKERFILE_REL))) return marker.dir;
   const cwd = process.cwd();
-  if (existsSync(join(cwd, DOCKERFILE_REL))) return cwd;
+  if (existsSync(resolveWithin(cwd, DOCKERFILE_REL))) return cwd;
   return null;
 }
 
@@ -521,7 +522,7 @@ function resolveBuildContext(explicit?: string): string | null {
 function defaultMailRef(context: string): string {
   let fallbackTag: string | undefined;
   try {
-    const pkg = JSON.parse(readFileSync(join(context, "apps", "api", "package.json"), "utf8")) as {
+    const pkg = JSON.parse(readFileSync(resolveWithin(context, "apps", "api", "package.json"), "utf8")) as {
       version?: string;
     };
     if (typeof pkg.version === "string") fallbackTag = pkg.version;
@@ -548,7 +549,7 @@ const buildCmd = new Command("build")
         );
         process.exit(1);
       }
-      const dockerfile = join(context, DOCKERFILE_REL);
+      const dockerfile = resolveWithin(context, DOCKERFILE_REL);
       if (!existsSync(dockerfile)) {
         err(`No apps/email/Dockerfile under ${context} — is that the repo root?`);
         process.exit(1);

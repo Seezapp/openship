@@ -1,7 +1,7 @@
 /** Directory discovery uses the same native root policy as source registration. */
 import { readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { normalizeLocalPath, resolveWithin } from "@repo/core/safe-path";
 import { AppError, OperationError } from "@repo/contracts";
 import { MANIFEST_FILES } from "../../lib/stack-detector";
 import { assertNativeSourcePath, defaultNativeSourceRoot } from "../../native/source-policy";
@@ -13,8 +13,9 @@ export async function browseDirectories(input: { path?: string } = {}) {
   assertSelfHosted();
   const native = process.env.OPENSHIP_NATIVE === "true";
   const raw = input.path || (native ? defaultNativeSourceRoot() : homedir());
-  let dirPath = resolve(raw);
+  let dirPath: string;
   try {
+    dirPath = normalizeLocalPath(raw);
     if (native) dirPath = await assertNativeSourcePath(dirPath);
     const st = await stat(dirPath);
     if (!st.isDirectory()) throw new OperationError("Not a directory", 400, "NOT_A_DIRECTORY");
@@ -25,7 +26,7 @@ export async function browseDirectories(input: { path?: string } = {}) {
   const entries = await readdir(dirPath, { withFileTypes: true });
   const directories: { name: string; path: string; isProject: boolean }[] = [];
   await Promise.all(entries.filter(entry => entry.isDirectory() && !entry.name.startsWith(".")).map(async entry => {
-    const childPath = join(dirPath, entry.name);
+    const childPath = resolveWithin(dirPath, entry.name);
     let isProject = false;
     if (native) {
       // Also check children in case an entry changed to a symlink since readdir.

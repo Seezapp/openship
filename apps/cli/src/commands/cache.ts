@@ -10,7 +10,7 @@
  */
 import { Command } from "commander";
 import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { resolveWithin } from "@repo/core/safe-path";
 import {
   CACHE_DIR,
   RELEASES_DIR,
@@ -38,7 +38,7 @@ function listAssets(): CachedAsset[] {
     if (!statSync(dir).isDirectory()) continue;
     for (const name of readdirSync(dir)) {
       if (name.endsWith(".sha256")) continue;
-      const path = join(dir, name);
+      const path = resolveWithin(dir, name);
       const st = statSync(path);
       if (!st.isFile()) continue;
       out.push({
@@ -109,7 +109,13 @@ const cleanCmd = new Command("clean")
   .description("Delete cached release assets")
   .argument("[tag]", "Only remove this release tag (default: all)")
   .action((tag?: string) => {
-    const target = tag ? releaseDir(tag) : RELEASES_DIR;
+    let target = RELEASES_DIR;
+    try {
+      if (tag) target = releaseDir(tag);
+    } catch (e) {
+      err((e as Error).message);
+      process.exit(1);
+    }
     if (!existsSync(target)) {
       if (isJsonMode()) printJson({ removed: false, path: target });
       else info(`  Nothing to clean (${target}).`);

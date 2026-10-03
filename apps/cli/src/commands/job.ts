@@ -1,5 +1,6 @@
 import { Command, Option } from "commander";
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import type { CreateJobInput, UpdateJobInput } from "@repo/sdk";
 import { getShipClient } from "../lib/ship-client";
 import { fail } from "../lib/cmd-helpers";
@@ -20,7 +21,7 @@ async function saveJob(opts: Record<string, string | boolean>, key?: string): Pr
   try {
     let body: Record<string, unknown> = {};
     if (opts.file) {
-      const contents = readFileSync(String(opts.file), "utf8");
+      const contents = readFileSync(resolve(String(opts.file)), "utf8");
       try { body = JSON.parse(contents); }
       catch { throw new Error("Job configuration must be valid JSON"); }
       if (body === null || typeof body !== "object" || Array.isArray(body)) {

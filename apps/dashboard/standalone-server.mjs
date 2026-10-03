@@ -35,6 +35,13 @@ const API_BASE = (
   "http://127.0.0.1:4000"
 ).replace(/\/+$/, "");
 
+// The one upstream this process ever dials. Parsed once from deployment config;
+// the request only ever contributes a path beneath it.
+const API_URL = new URL(API_BASE);
+if (API_URL.protocol !== "http:" && API_URL.protocol !== "https:") {
+  throw new Error(`INTERNAL_API_URL must be an http(s) URL, got ${API_URL.protocol}//`);
+}
+
 const PROXY_PREFIX = "/api/proxy";
 
 /**
@@ -45,15 +52,20 @@ const PROXY_PREFIX = "/api/proxy";
 function proxyUpgrade(req, clientSocket, head) {
   const upstreamPath = req.url.slice(PROXY_PREFIX.length) || "/";
   const target = new URL(API_BASE + upstreamPath);
+  // The client controls `req.url`; it must not be able to move the upstream off
+  // the configured API (a path that re-parses as another authority, userinfo…).
+  if (target.origin !== API_URL.origin || target.username || target.password) {
+    throw new Error("proxy target escaped the internal API origin");
+  }
   const proxyReq = http.request({
-    protocol: target.protocol,
-    hostname: target.hostname,
-    port: target.port || (target.protocol === "https:" ? 443 : 80),
+    protocol: API_URL.protocol,
+    hostname: API_URL.hostname,
+    port: API_URL.port || (API_URL.protocol === "https:" ? 443 : 80),
     path: target.pathname + target.search,
     method: req.method,
     // Pass the client's headers verbatim (Upgrade, Connection, Sec-WebSocket-*,
     // Cookie) so the API sees a genuine upgrade + the terminal ticket/session.
-    headers: { ...req.headers, host: target.host },
+    headers: { ...req.headers, host: API_URL.host },
   });
 
   proxyReq.on("upgrade", (proxyRes, proxySocket, proxyHead) => {

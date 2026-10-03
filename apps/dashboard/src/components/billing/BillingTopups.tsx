@@ -12,6 +12,7 @@ import { api } from "@/lib/api/client";
 import { useI18n, interpolate } from "@/components/i18n-provider";
 import type { BillingState } from "@/lib/api/billing";
 import { formatMilliCredits } from "@/lib/billing-usage";
+import { httpUrlOrNull } from "@/utils/safe-url";
 
 export type { BillingState };
 
@@ -116,7 +117,10 @@ const CreditPacks: React.FC<BillingTopupsProps> = ({ state }) => {
       // Retry the same purchase key; a different pack is a different purchase.
       if (!checkoutAttempts.current.has(packId)) checkoutAttempts.current.set(packId, randomUUID());
       const res = await api.post<CheckoutResponse>("billing/topup", { packId, idempotencyKey: checkoutAttempts.current.get(packId) });
-      window.location.href = res.data.checkoutUrl;
+      // Only follow a hosted-checkout link that is a real http(s) URL.
+      const checkoutUrl = httpUrlOrNull(res.data.checkoutUrl);
+      if (!checkoutUrl) throw new Error(t.billing.topups.checkoutError);
+      window.location.href = checkoutUrl;
     } catch (err) {
       setError(err instanceof Error ? err.message : t.billing.topups.checkoutError);
       setBuyingPackId(null);
@@ -129,7 +133,9 @@ const CreditPacks: React.FC<BillingTopupsProps> = ({ state }) => {
     setError(null);
     try {
       const res = await api.post<PortalResponse>("billing/portal");
-      window.location.href = res.data.portalUrl;
+      const portalUrl = httpUrlOrNull(res.data.portalUrl);
+      if (!portalUrl) throw new Error(t.billing.topups.portalError);
+      window.location.href = portalUrl;
     } catch (err) {
       setError(err instanceof Error ? err.message : t.billing.topups.portalError);
       setOpeningPortal(false);

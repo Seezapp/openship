@@ -1,8 +1,9 @@
 import { openSync, writeSync, closeSync, readFileSync, unlinkSync, statSync } from "fs";
-import { dirname, basename, join } from "path";
+import { dirname, basename } from "path";
 import { hostname } from "os";
 import { spawnSync } from "child_process";
 import { randomUUID } from "node:crypto";
+import { resolveWithin } from "@repo/core/safe-path";
 
 /**
  * Single-instance lock for a PGlite data directory.
@@ -29,7 +30,7 @@ import { randomUUID } from "node:crypto";
  * it beside the dir (`<dir>.lock`) leaves the cluster directory pristine.
  */
 function lockPathFor(dataDir: string): string {
-  return join(dirname(dataDir), `${basename(dataDir)}.lock`);
+  return resolveWithin(dirname(dataDir), `${basename(dataDir)}.lock`);
 }
 
 /**

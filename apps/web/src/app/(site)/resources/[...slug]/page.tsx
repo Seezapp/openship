@@ -75,6 +75,16 @@ export async function generateMetadata({
   };
 }
 
+/**
+ * Serialize JSON-LD for an inline `<script>`. Post titles and descriptions come
+ * from content files, and `<` is the only character that can end a script
+ * element (`</script>`, `<!--`), so it is emitted as its JSON escape — the
+ * parsed value is identical.
+ */
+function jsonLd(data: unknown): string {
+  return JSON.stringify(data).replace(/</g, "\\u003c");
+}
+
 export default async function ResourcePostPage({ params }: { params: Params }) {
   const { slug } = await params;
   const rawPage = resourcesSource.getPage(slug);
@@ -142,11 +152,11 @@ export default async function ResourcePostPage({ params }: { params: Params }) {
     <div className="res-post">
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(articleStructuredData) }}
+        dangerouslySetInnerHTML={{ __html: jsonLd(articleStructuredData) }}
       />
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumbStructuredData) }}
+        dangerouslySetInnerHTML={{ __html: jsonLd(breadcrumbStructuredData) }}
       />
 
       <div className="res-post-inner">

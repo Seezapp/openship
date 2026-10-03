@@ -11,6 +11,7 @@ import {
   ListObjectsV2Command,
 } from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
+import { normalizeLocalPath } from "@repo/core/safe-path";
 import type { ArchiveFile } from "./types";
 
 export class TaskArchiveStore {
@@ -98,9 +99,10 @@ export class TaskArchiveStore {
   }
   async upload(key: string, path: string): Promise<ArchiveFile> {
     this.check(key);
-    const sizeBytes = (await stat(path)).size;
+    const file = normalizeLocalPath(path);
+    const sizeBytes = (await stat(file)).size;
     const hash = createHash("sha256");
-    const source = createReadStream(path);
+    const source = createReadStream(file);
     source.on("data", (chunk) => hash.update(chunk));
     const upload = new Upload({
       client: this.client,

@@ -20,10 +20,15 @@ vi.mock("bullmq", async (importOriginal) => {
   }
   // Exercise BullMQ's real option defaults and key/client naming without Redis I/O.
   function queue(name: string, options: QueueOptions) {
-    const instance = new actual.QueueBase(
-      name,
-      options,
-      OfflineConnection as unknown as typeof actual.RedisConnection,
+    const keys = new actual.QueueKeys(options.prefix);
+    const instance = new actual.QueueBase(name, options, (queueName, opts) =>
+      new actual.RedisQueueBackend(
+        new OfflineConnection() as unknown as InstanceType<typeof actual.RedisConnection>,
+        queueName,
+        keys.getKeys(queueName),
+        (type) => keys.toKey(queueName, type),
+        opts,
+      ),
     );
     observed.queues.push(instance);
     return instance;
@@ -68,7 +73,7 @@ describe("backup queue namespace compatibility", () => {
     for (const queue of observed.queues) {
       expect(queue.qualifiedName).toBe(`bull:${queue.name}`);
       expect(queue.clientName()).toBe(`bull:${Buffer.from(queue.name).toString("base64")}`);
-      expect(queue.opts.prefix).toBe("bull");
+      expect(queue.toKey("wait")).toBe(`bull:${queue.name}:wait`);
     }
   });
 

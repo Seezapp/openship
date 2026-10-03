@@ -55,7 +55,7 @@ export const LANGUAGES = {
   },
   go: {
     name: "Go",
-    buildImage: "golang:1.22-alpine",
+    buildImage: "golang:1.26-alpine",
     runtimeImage: "alpine:3.19",
     packageManagers: ["go"],
     requiredTools: ["go"],

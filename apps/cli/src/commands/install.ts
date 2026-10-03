@@ -18,6 +18,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import ora from "ora";
+import { resolveWithin } from "@repo/core/safe-path";
 import {
   downloadToFile,
   formatBytes,
@@ -117,7 +118,7 @@ function launch(kind: AssetKind, target: string): void {
     return;
   }
   // zip: find and start the exe under the install dir.
-  const exe = join(target, "Openship.exe");
+  const exe = resolveWithin(target, "Openship.exe");
   const path = existsSync(exe) ? exe : target;
   spawnSync("cmd", ["/c", "start", "", path]);
 }
@@ -154,8 +155,14 @@ export const installCommand = new Command("install")
       process.exit(1);
     }
 
-    const dir = releaseDir(tag);
-    const assetPath = join(dir, asset.name);
+    let dir: string;
+    try {
+      dir = releaseDir(tag);
+    } catch (e) {
+      err((e as Error).message);
+      process.exit(1);
+    }
+    const assetPath = resolveWithin(dir, asset.name);
     const sidecarPath = `${assetPath}.sha256`;
     const assetUrl = `${RELEASES}/download/${tag}/${asset.name}`;
     const sidecarUrl = `${assetUrl}.sha256`;

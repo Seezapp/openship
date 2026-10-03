@@ -20,10 +20,14 @@ const REVALIDATE = 600; // 10 minutes
 
 /** One bullet from the changelog, split into a headline and the prose under it. */
 export interface ChangelogItem {
-  /** Inline HTML of the headline — the row you see while the item is collapsed. */
+  /** Inline HTML of the headline. Kept for `/api/changelog` consumers; the site renders {@link titleMd}. */
   title: string;
-  /** Rendered HTML of the detail, or `""` for a one-liner that has nothing to open. */
+  /** Rendered HTML of the detail, or `""` for a one-liner. Kept for `/api/changelog` consumers. */
   detailHtml: string;
+  /** Inline markdown of the headline — the row you see while the item is collapsed. */
+  titleMd: string;
+  /** Markdown of the detail, or `""` for a one-liner that has nothing to open. */
+  detailMd: string;
 }
 
 /** One `### ` group inside a version. */
@@ -31,8 +35,10 @@ export interface ChangelogSection {
   /** Heading text, or `""` for bullets that appear before any heading. */
   title: string;
   items: ChangelogItem[];
-  /** Rendered HTML of the group's loose paragraphs (e.g. "Upgrade note: …"). */
+  /** Rendered HTML of the group's loose paragraphs. Kept for `/api/changelog` consumers. */
   notesHtml: string[];
+  /** Markdown of the group's loose paragraphs (e.g. "Upgrade note: …"). */
+  notesMd: string[];
 }
 
 export interface ChangelogEntry {
@@ -49,8 +55,10 @@ export interface ChangelogEntry {
   summary: string;
   /** Rendered HTML of the version's body. Kept for `/api/changelog` consumers. */
   html: string;
-  /** Rendered HTML of the version's lead-in paragraph. */
+  /** Rendered HTML of the version's lead-in paragraph. Kept for `/api/changelog` consumers. */
   leadHtml: string;
+  /** Markdown of the version's lead-in paragraph — what the site renders. */
+  leadMd: string;
   /** The body, structured for the collapsed version → item → detail rendering. */
   sections: ChangelogSection[];
   /** Total bullets across {@link sections} — shown on the collapsed version row. */
@@ -203,12 +211,14 @@ function parseGroups(body: string): RawGroup[] {
 /** Render a version body into the lead paragraph plus its collapsible sections. */
 async function renderBody(body: string): Promise<{
   leadHtml: string;
+  leadMd: string;
   sections: ChangelogSection[];
 }> {
   const groups = parseGroups(body);
   // Anything before the first `### ` is the version's lead-in.
   const lead = groups[0]?.title ? undefined : groups.shift();
-  const leadHtml = lead?.notes.length ? await marked.parse(lead.notes.join("\n\n")) : "";
+  const leadMd = lead?.notes.join("\n\n") ?? "";
+  const leadHtml = leadMd ? await marked.parse(leadMd) : "";
   if (lead?.items.length) groups.unshift({ title: "", items: lead.items, notes: [] });
 
   const sections: ChangelogSection[] = [];
@@ -220,15 +230,18 @@ async function renderBody(body: string): Promise<{
       items.push({
         title: await marked.parseInline(title),
         detailHtml: detail ? capitalizeDetail(await marked.parse(detail)) : "",
+        titleMd: title,
+        detailMd: detail,
       });
     }
     sections.push({
       title: group.title,
       items,
       notesHtml: await Promise.all(group.notes.map((n) => marked.parse(n))),
+      notesMd: group.notes,
     });
   }
-  return { leadHtml, sections };
+  return { leadHtml, leadMd, sections };
 }
 
 /** Lightly infer tag pills from the section content. */
@@ -287,7 +300,7 @@ export const getChangelog = cache(async (): Promise<ChangelogEntry[]> => {
     const entries: ChangelogEntry[] = [];
     for (const { version, body, date } of dated) {
       if (!date) continue; // a tagged version we couldn't date — skip rather than guess
-      const { leadHtml, sections } = await renderBody(body);
+      const { leadHtml, leadMd, sections } = await renderBody(body);
       entries.push({
         version,
         displayVersion: `v${version}`,
@@ -297,6 +310,7 @@ export const getChangelog = cache(async (): Promise<ChangelogEntry[]> => {
         summary: firstParagraph(body),
         html: await marked.parse(body),
         leadHtml,
+        leadMd,
         sections,
         itemCount: sections.reduce((n, s) => n + s.items.length, 0),
       });

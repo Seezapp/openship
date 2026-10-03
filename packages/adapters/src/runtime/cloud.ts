@@ -16,6 +16,7 @@ import type { ExecStreamEvent } from "oblien";
 import type { RoutesInput, RoutesResult } from "oblien";
 import { readFile } from "node:fs/promises";
 import { join, posix } from "node:path";
+import { resolveWithinPosix } from "@repo/core/safe-path";
 
 import {
   DEFAULT_RESOURCE_CONFIG,
@@ -225,7 +226,7 @@ function envExportPrefix(env: Record<string, string | null | undefined>): string
 }
 
 function joinWorkspacePath(base: string, ...parts: string[]): string {
-  return posix.normalize(posix.join(base, ...parts.filter(Boolean)));
+  return resolveWithinPosix(base, ...parts.filter(Boolean));
 }
 
 function resolveVmPath(workdir: string, target: string): string {

@@ -52,6 +52,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { resolveWithin } from "@repo/core/safe-path";
 import { spawn } from "node:child_process";
 import { safeFetch, type SafeFetchResponse } from "./safe-fetch";
 import { assertPublicHostLiteral, SsrfError } from "./ssrf-guard";
@@ -126,7 +127,7 @@ export async function fetchAndExtractRelease(
   const external = Boolean(input.assetUrl);
   const envOverride = input.envOverride ?? DEFAULT_ENV_OVERRIDE;
 
-  const targetDir = resolve(cacheDir, tag);
+  const targetDir = resolveWithin(cacheDir, tag);
 
   // 1. Cache hit — return without any network round-trip.
   if (existsSync(targetDir)) {
@@ -162,8 +163,8 @@ export async function fetchAndExtractRelease(
 
   mkdirSync(cacheDir, { recursive: true });
 
-  const scratchTarball = join(cacheDir, `${tag}.${process.pid}.tar.gz`);
-  const scratchSha = join(cacheDir, `${tag}.${process.pid}.sha256`);
+  const scratchTarball = resolveWithin(cacheDir, `${tag}.${process.pid}.tar.gz`);
+  const scratchSha = resolveWithin(cacheDir, `${tag}.${process.pid}.sha256`);
   const scratchDir = `${targetDir}.tmp.${process.pid}`;
 
   // Defensive: clean any pre-existing scratch with our pid (crashed

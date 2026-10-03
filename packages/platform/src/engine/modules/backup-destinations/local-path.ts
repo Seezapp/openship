@@ -9,6 +9,7 @@
 
 import path from "node:path";
 import { realpath } from "node:fs/promises";
+import { resolveWithin } from "@repo/core/safe-path";
 
 /**
  * System trees `BACKUP_LOCAL_ROOT` must never point at. Checked against the
@@ -53,7 +54,7 @@ async function resolveDeep(target: string): Promise<string> {
       parent = path.dirname(parent);
       try {
         const real = await realpath(parent);
-        return path.join(real, target.slice(parent.length));
+        return resolveWithin(real, path.relative(parent, target));
       } catch {
         // keep walking up
       }

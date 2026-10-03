@@ -15,8 +15,9 @@
  */
 import { Command } from "commander";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { parseOpenshipConfigJson, type OpenshipConfig } from "@repo/core";
+import { resolveWithin } from "@repo/core/safe-path";
 import { err, info, isJsonMode, ok, printJson } from "../lib/output";
 
 const SCHEMA_URL = "https://openship.io/openship.schema.json";
@@ -32,12 +33,12 @@ function detectHints(dir: string): Partial<OpenshipConfig> {
     ["package-lock.json", "npm"],
   ];
   for (const [file, pm] of lock) {
-    if (existsSync(join(dir, file))) {
+    if (existsSync(resolveWithin(dir, file))) {
       hints.packageManager = pm;
       break;
     }
   }
-  const pkgPath = join(dir, "package.json");
+  const pkgPath = resolveWithin(dir, "package.json");
   if (existsSync(pkgPath)) {
     try {
       const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as { scripts?: Record<string, string> };
@@ -58,7 +59,7 @@ const initCmd = new Command("init")
   .option("--force", "Overwrite an existing openship.json")
   .action((opts) => {
     const dir: string = opts.dir || process.cwd();
-    const path = join(dir, CONFIG_FILE);
+    const path = resolveWithin(dir, CONFIG_FILE);
     if (existsSync(path) && !opts.force) {
       err(`${CONFIG_FILE} already exists. Re-run with --force to overwrite.`);
       process.exit(1);
@@ -91,7 +92,7 @@ const validateCmd = new Command("validate")
       process.exit(1);
     }
 
-    const { config, errors, warnings } = parseOpenshipConfigJson(readFileSync(path, "utf8"));
+    const { config, errors, warnings } = parseOpenshipConfigJson(readFileSync(resolve(path), "utf8"));
     const valid = errors.length === 0 && config !== null;
 
     if (isJsonMode()) {

@@ -21,7 +21,9 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 
-import { downloadToFile, parseSha256 } from "./cache";
+import { resolveWithin } from "@repo/core/safe-path";
+
+import { downloadToFile, parseSha256, tagDir } from "./cache";
 import { assetUrl, expectedSha256, fetchSidecar, resolveLatestTag } from "./github-releases";
 import { OS_DIR } from "./paths";
 
@@ -95,9 +97,9 @@ export async function ensureCliPayload(
   onProgress?: (received: number, total: number) => void,
 ): Promise<CliPayload> {
   const resolved = tag ?? (await resolveLatestTag());
-  const dir = join(CLI_DIR, resolved);
-  const entry = join(dir, "dist", "index.js");
-  const marker = join(dir, ".extracted");
+  const dir = tagDir(CLI_DIR, resolved);
+  const entry = resolveWithin(dir, "dist", "index.js");
+  const marker = resolveWithin(dir, ".extracted");
 
   if (existsSync(marker) && existsSync(entry)) {
     repoint(CLI_CURRENT, resolved);
@@ -111,7 +113,7 @@ export async function ensureCliPayload(
   const name = assetName(resolved);
   const override = process.env.OPENSHIP_CLI_ASSET_URL?.trim();
   const url = override || assetUrl(resolved, name);
-  const tarball = join(dir, name);
+  const tarball = resolveWithin(dir, name);
   const { sha256 } = await downloadToFile(url, tarball, onProgress);
 
   const expected = override

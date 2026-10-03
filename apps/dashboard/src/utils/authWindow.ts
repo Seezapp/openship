@@ -12,6 +12,8 @@
  *   handle.onClose(() => { ... });           // fires when auth flow ends
  */
 
+import { isHttpUrl } from "./safe-url";
+
 /* ── Public types ─────────────────────────────────────────────────── */
 
 export interface AuthWindowHandle {
@@ -65,12 +67,14 @@ function isElectron(): boolean {
 const POPUP_WIDTH = 600;
 const POPUP_HEIGHT = 700;
 
-function createBrowserHandle(initialUrl = "about:blank"): AuthWindowHandle {
+function createBrowserHandle(initialUrl?: string): AuthWindowHandle {
   const left = window.screen.width / 2 - POPUP_WIDTH / 2;
   const top = window.screen.height / 2 - POPUP_HEIGHT / 2;
 
+  // Auth URLs come from the API. The popup shares this origin's opener, so it
+  // is only ever pointed at an http(s) page — anything else opens blank.
   const popup = window.open(
-    initialUrl,
+    isHttpUrl(initialUrl) ? initialUrl : "about:blank",
     "Auth",
     `width=${POPUP_WIDTH},height=${POPUP_HEIGHT},left=${left},top=${top}`,
   );
@@ -87,7 +91,7 @@ function createBrowserHandle(initialUrl = "about:blank"): AuthWindowHandle {
   return {
     blocked: popup === null,
     navigate(url: string) {
-      if (popup && !popup.closed) {
+      if (popup && !popup.closed && isHttpUrl(url)) {
         popup.location.href = url;
         popup.focus();
       }
@@ -124,7 +128,7 @@ function createElectronHandle(initialUrl?: string): AuthWindowHandle {
   // behavior where `window.open(initialUrl, ...)` opens immediately),
   // hand it to the desktop bridge now. This keeps that supported calling
   // convention equivalent across browser and desktop runtimes.
-  if (initialUrl) {
+  if (isHttpUrl(initialUrl)) {
     try {
       desktop?.onboarding?.openExternal?.(initialUrl);
     } catch {
@@ -142,7 +146,7 @@ function createElectronHandle(initialUrl?: string): AuthWindowHandle {
   return {
     blocked: false,
     navigate(url: string) {
-      desktop.onboarding.openExternal(url);
+      if (isHttpUrl(url)) desktop.onboarding.openExternal(url);
     },
 
     onClose(cb: () => void) {

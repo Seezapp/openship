@@ -7,15 +7,32 @@
  */
 import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream, mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { OS_DIR } from "./paths";
 
 export const CACHE_DIR = join(OS_DIR, "cache");
 export const RELEASES_DIR = join(CACHE_DIR, "releases");
 
+/**
+ * `<base>/<tag>` for a release tag. The tag comes from a flag or the GitHub API
+ * and callers `rm -rf` the result, so it must name something strictly INSIDE
+ * `base` — never `base` itself (".", "") or anything above it ("..", absolute).
+ * A local check rather than @repo/core/safe-path: this module is part of the
+ * dependency-free recovery chain (see node-entry-gate.test.ts).
+ */
+export function tagDir(base: string, tag: string): string {
+  const root = resolve(base);
+  const dir = resolve(root, tag);
+  const rel = relative(root, dir);
+  if (!rel || tag.includes("\0") || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+    throw new Error(`Invalid release tag: ${JSON.stringify(tag)}`);
+  }
+  return dir;
+}
+
 export function releaseDir(tag: string): string {
-  return join(RELEASES_DIR, tag);
+  return tagDir(RELEASES_DIR, tag);
 }
 
 /** SHA-256 hex of a hex-or-`<hex>  <name>` sidecar body, or null if malformed. */

@@ -1,5 +1,6 @@
 import { stat, readdir, readFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { basename } from "node:path";
+import { resolveWithin } from "@repo/core/safe-path";
 import { isIgnoredRepoPath, type RepoTreeEntry } from "../../lib/project-root-detector";
 import type { ProjectReader } from "./project-reader";
 import {
@@ -28,7 +29,7 @@ async function listLocalTree(dirPath: string): Promise<RepoTreeEntry[]> {
 
       tree.push({ path: nextRelativePath, type: entry.isDirectory() ? "dir" : "file" });
       if (entry.isDirectory()) {
-        await visit(join(absolutePath, entry.name), nextRelativePath);
+        await visit(resolveWithin(absolutePath, entry.name), nextRelativePath);
       }
     }
   };
@@ -40,7 +41,10 @@ async function listLocalTree(dirPath: string): Promise<RepoTreeEntry[]> {
 function createLocalReader(dirPath: string): ProjectReader {
   let treePromise: Promise<RepoTreeEntry[]> | null = null;
 
-  const absolutePathFor = (path: string) => (path ? join(dirPath, path) : dirPath);
+  // Reader paths come from the project itself (a manifest's workspace globs, a
+  // configured root directory), so each one is resolved contained: anything that
+  // would leave the source folder throws, which every reader below reports as absent.
+  const absolutePathFor = (path: string) => (path ? resolveWithin(dirPath, path) : dirPath);
 
   return {
     listDirectory: async (path: string) => {

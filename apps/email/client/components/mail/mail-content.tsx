@@ -6,6 +6,7 @@ import { getBrowserTimezone } from '@/lib/timezones';
 import { useSettings } from '@/hooks/use-settings';
 import { m } from '@/paraglide/messages';
 import { useTheme } from 'next-themes';
+import DOMPurify from 'dompurify';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 
@@ -109,9 +110,21 @@ export function MailContent({ id, html, senderEmail }: MailContentProps) {
     // SF Arabic fallback) to the rendered email body. `@font-face`
     // declarations in the outer document remain accessible per spec,
     // so we only need to set font-family inside the shadow tree.
-    shadowRootRef.current.innerHTML =
-      `<style>:host, :host * { font-family: 'Gellix', 'SF Arabic', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; }</style>` +
-      processedData.html;
+    const style = document.createElement('style');
+    style.textContent = `:host, :host * { font-family: 'Gellix', 'SF Arabic', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; }`;
+
+    // The body was sanitized by the server, but this is where it becomes live
+    // DOM in the app origin, so it is sanitized again here and attached as
+    // nodes — never assigned as markup. HTML profile only (the server allows no
+    // SVG/MathML); FORCE_BODY keeps leading elements that would otherwise be
+    // parsed into <head> and dropped; `target` is what the server sets on links.
+    const body = DOMPurify.sanitize(processedData.html, {
+      USE_PROFILES: { html: true },
+      ADD_ATTR: ['target'],
+      FORCE_BODY: true,
+      RETURN_DOM_FRAGMENT: true,
+    });
+    shadowRootRef.current.replaceChildren(style, body);
   }, [processedData]);
 
   const handleImageError = useCallback(

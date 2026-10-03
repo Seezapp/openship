@@ -7,6 +7,7 @@ import { hasUnresolvedPlaceholder, resolveLocalized } from "@repo/core";
 import { appsApi, type AppConnectionOutput, type AppConnectionView } from "@/lib/api/apps";
 import { useI18n } from "@/components/i18n-provider";
 import { useLocalhostForward } from "@/hooks/useLocalhostForward";
+import { isHttpUrl } from "@/utils/safe-url";
 import { UseInProjectModal } from "./UseInProjectModal";
 
 /**
@@ -237,7 +238,10 @@ function OutputRow({
   // Gated on a resolved http(s) value (hides on the "—" state) and excludes
   // synthesized internal east-west addresses, which aren't browser-reachable.
   const canOpen = output.kind === "url" && opensTab && !output.internal;
-  const openInTab = () => window.open(value, "_blank", "noopener,noreferrer");
+  // The value is a deployment output — only ever navigate to a parsed http(s) URL.
+  const openInTab = () => {
+    if (isHttpUrl(value)) window.open(value, "_blank", "noopener,noreferrer");
+  };
 
   const copy = async () => {
     if (!value) return;

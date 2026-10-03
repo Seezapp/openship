@@ -27,6 +27,7 @@
 import { existsSync, readdirSync, statSync, unlinkSync, mkdirSync, copyFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { resolveWithin } from "@repo/core/safe-path";
 
 function resolveDataDir(): string {
   return process.env.PGLITE_DATA_DIR ?? join(homedir(), ".openship", "data");
@@ -35,8 +36,8 @@ function resolveDataDir(): string {
 function copyDirRecursive(src: string, dest: string): void {
   if (!existsSync(dest)) mkdirSync(dest, { recursive: true });
   for (const entry of readdirSync(src)) {
-    const s = join(src, entry);
-    const d = join(dest, entry);
+    const s = resolveWithin(src, entry);
+    const d = resolveWithin(dest, entry);
     const st = statSync(s);
     if (st.isDirectory()) {
       copyDirRecursive(s, d);

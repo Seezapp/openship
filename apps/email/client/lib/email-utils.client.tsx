@@ -3,6 +3,7 @@ import { getListUnsubscribeAction } from '@/lib/email-utils';
 import { trpcClient } from '@/providers/query-provider';
 import { renderToString } from 'react-dom/server';
 import type { ParsedMessage } from '@/types';
+import DOMPurify from 'dompurify';
 
 export const handleUnsubscribe = async ({ emailData }: { emailData: ParsedMessage }) => {
   try {
@@ -158,6 +159,9 @@ const proxyImageUrls = (html: string): string => {
 };
 
 const EmailTemplate = ({ content, imagesEnabled, nonce }: EmailTemplateProps) => {
+  // `content` is a message body. Sanitize at the sink so no caller can hand this
+  // template markup that scripts; `target` is kept for forceExternalLinks.
+  const safeContent = DOMPurify.sanitize(content, { ADD_ATTR: ['target'] });
   return (
     <Html>
       <Head>
@@ -193,7 +197,7 @@ const EmailTemplate = ({ content, imagesEnabled, nonce }: EmailTemplateProps) =>
           <Section style={{ width: '100%', background: 'transparent' }}>
             <Row style={{ background: 'transparent' }}>
               <Column style={{ background: 'transparent' }}>
-                <div dangerouslySetInnerHTML={{ __html: content }} />
+                <div dangerouslySetInnerHTML={{ __html: safeContent }} />
               </Column>
             </Row>
           </Section>

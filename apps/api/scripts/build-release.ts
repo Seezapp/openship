@@ -55,6 +55,7 @@ import { cp, mkdir, rm, readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveWithin } from "@repo/core/safe-path";
 
 const API_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const REPO_ROOT = resolve(API_DIR, "../..");
@@ -278,9 +279,9 @@ export async function writeReleaseRootPackage(dist: string, version: string): Pr
   const source = await readJson(join(REPO_ROOT, "package.json"));
   const patches = (source.patchedDependencies ?? {}) as Record<string, string>;
   for (const path of Object.values(patches)) {
-    const target = join(dist, path);
+    const target = resolveWithin(dist, path);
     await mkdir(dirname(target), { recursive: true });
-    await cp(join(REPO_ROOT, path), target);
+    await cp(resolveWithin(REPO_ROOT, path), target);
   }
   await writeJson(join(dist, "package.json"), {
     ...buildRootPackageJson(version),

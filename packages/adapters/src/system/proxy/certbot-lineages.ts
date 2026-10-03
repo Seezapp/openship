@@ -1,5 +1,6 @@
 import { readdir } from "node:fs/promises";
 import { posix as path } from "node:path";
+import { resolveWithinPosix } from "@repo/core/safe-path";
 import type { CommandExecutor } from "../../types";
 import { sq } from "../local-shell";
 
@@ -74,6 +75,6 @@ export async function certbotLineageDirs(
     .filter((name) => isCertbotLineageName(name, hostname))
     .sort()
     .reverse()
-    .map((name) => path.join(certDir, name));
-  return dirs.length ? dirs : [path.join(certDir, hostname)];
+    .map((name) => resolveWithinPosix(certDir, name));
+  return dirs.length ? dirs : [resolveWithinPosix(certDir, hostname)];
 }

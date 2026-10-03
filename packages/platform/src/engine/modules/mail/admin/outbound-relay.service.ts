@@ -97,7 +97,8 @@ import {
   type OutboundRelay,
   type PersistedDnsRecord,
 } from "../mail-state";
-import { execute, q } from "./psql-runner";
+import { execute } from "./psql-runner";
+import { sql, sqlJoin, sqlRaw } from "./sql";
 
 /**
  * Legacy include. Older builds hardcoded SES's token onto every relayed domain's
@@ -573,8 +574,9 @@ export async function configureOutboundRelay(
     // OTHER host are left alone: we don't own them.
     await execute(
       exec,
-      `DELETE FROM sender_relayhost WHERE relayhost = ${q(nexthop)}` +
-        (priorNexthop ? ` OR relayhost = ${q(priorNexthop)}` : ""),
+      sql`DELETE FROM sender_relayhost WHERE relayhost = ${nexthop}${
+        priorNexthop ? sql` OR relayhost = ${priorNexthop}` : sqlRaw("")
+      }`,
     ).catch(() => {});
   } else {
     await engineExec.exec(engine("postconf -X relayhost") + " 2>/dev/null || true");
@@ -593,17 +595,19 @@ export async function configureOutboundRelay(
     for (const account of selected) {
       await execute(
         exec,
-        `INSERT INTO sender_relayhost (account, relayhost) VALUES (${q(account)}, ${q(nexthop)}) ` +
-          `ON CONFLICT (account) DO UPDATE SET relayhost = EXCLUDED.relayhost`,
+        sql`INSERT INTO sender_relayhost (account, relayhost) VALUES (${account}, ${nexthop}) ON CONFLICT (account) DO UPDATE SET relayhost = EXCLUDED.relayhost`,
       );
     }
     // Drop rows we own that are no longer selected — plus every row pointing at a
     // relay host we just replaced, whichever sender it was for.
-    const notIn = selected.length ? ` AND account NOT IN (${selected.map(q).join(", ")})` : "";
+    const notIn = selected.length
+      ? sql` AND account NOT IN (${sqlJoin(selected.map((account) => sql`${account}`), ", ")})`
+      : sqlRaw("");
     await execute(
       exec,
-      `DELETE FROM sender_relayhost WHERE (relayhost = ${q(nexthop)}${notIn})` +
-        (priorNexthop ? ` OR relayhost = ${q(priorNexthop)}` : ""),
+      sql`DELETE FROM sender_relayhost WHERE (relayhost = ${nexthop}${notIn})${
+        priorNexthop ? sql` OR relayhost = ${priorNexthop}` : sqlRaw("")
+      }`,
     ).catch(() => {});
   }
 
@@ -668,7 +672,7 @@ export async function disableOutboundRelay(exec: CommandExecutor): Promise<MailS
   const staleInclude = relay ? relaySpfInclude(relay) : undefined;
   if (relay?.host) {
     const nexthop = `[${relay.host}]:${relay.port}`;
-    await execute(exec, `DELETE FROM sender_relayhost WHERE relayhost = ${q(nexthop)}`).catch(() => {});
+    await execute(exec, sql`DELETE FROM sender_relayhost WHERE relayhost = ${nexthop}`).catch(() => {});
   }
 
   await engineExec.exec(engine("postfix reload"));

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 
 import { PACKAGE_ROOT_ONLY_EXCLUDES } from "@repo/core";
+import { resolveWithin } from "@repo/core/safe-path";
 
 const execFileAsync = promisify(execFile);
 
@@ -85,10 +86,11 @@ async function existingRelativePaths(root: string, paths?: string[]): Promise<st
   const found: string[] = [];
   for (const p of paths) {
     try {
-      await stat(join(root, p));
+      await stat(resolveWithin(root, p));
       found.push(p);
     } catch {
-      // Missing (e.g. build produced no such dir) — skip; never abort the pack.
+      // Missing (e.g. build produced no such dir) or pointing outside `root` —
+      // skip; never abort the pack.
     }
   }
   return found;

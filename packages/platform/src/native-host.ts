@@ -5,6 +5,7 @@ import { existsSync } from "node:fs";
 import { mkdir, realpath } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { resolveWithin } from "@repo/core/safe-path";
 import { releaseExitedWorkerLock } from "@repo/db/lock";
 import { AppError, OperationError, ValidationError, type DeploymentEvent } from "@repo/contracts";
 import type { PlatformKernel } from "./index";
@@ -123,7 +124,7 @@ export async function createNativePlatform(value: NativePlatformOptions): Promis
   const entry = runtimeEntry();
   const nativeDir = dirname(entry);
   const assets = existsSync(join(nativeDir, "pglite")) ? nativeDir : join(nativeDir, "../server");
-  const state = join(resolve(options.stateDirectory), options.instanceId);
+  const state = resolveWithin(resolve(options.stateDirectory), options.instanceId);
   await mkdir(state, { recursive: true, mode: 0o700 });
   const roots: string[] = [];
   for (const root of options.policy?.sourceRoots ?? []) {

@@ -6,7 +6,7 @@
 
 import { readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { resolve } from "node:path";
+import { normalizeLocalPath, resolveWithin } from "@repo/core/safe-path";
 import { isLoopbackHost } from "@repo/core";
 import {
   countInstanceSubgraphTables,
@@ -271,8 +271,12 @@ export async function prepareInstanceExport(
     for (const server of dump.tables.servers ?? []) {
       if (server.isLocal || server.sshPrivateKey || !server.sshKeyPath) continue;
       const keyPath = String(server.sshKeyPath);
-      const path = keyPath.startsWith("~/") ? resolve(homedir(), keyPath.slice(2)) : keyPath;
       try {
+        // An operator-configured key file: `~/…` stays under the home directory,
+        // anything else is the absolute location they chose.
+        const path = keyPath.startsWith("~/")
+          ? resolveWithin(homedir(), keyPath.slice(2))
+          : normalizeLocalPath(keyPath);
         const info = await stat(path);
         if (!info.isFile() || info.size > 1_048_576) throw new Error("Invalid SSH key file");
         const value = await readFile(path, "utf8");

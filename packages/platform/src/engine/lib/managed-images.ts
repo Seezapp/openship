@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { type Dirent, existsSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
+import { resolveWithin } from "@repo/core/safe-path";
 
 import { apiRootPath } from "./release-resolver";
 
@@ -67,7 +68,7 @@ function statSignature(dir: string): string[] {
     }
     for (const entry of entries) {
       if (entry.name === ".DS_Store") continue;
-      const child = join(abs, entry.name);
+      const child = resolveWithin(abs, entry.name);
       if (entry.isDirectory()) {
         if (SIGNATURE_SKIP_DIRS.has(entry.name)) continue;
         walk(child);
@@ -115,7 +116,7 @@ export function devSourceTag(
   buildContext: string,
   componentSubdir: string,
 ): string | undefined {
-  const dir = join(buildContext, componentSubdir);
+  const dir = resolveWithin(buildContext, componentSubdir);
   const now = Date.now();
   const cached = devTagCache.get(dir);
   if (cached && now - cached.at < DEV_TAG_TTL_MS) return cached.tag;

@@ -49,6 +49,7 @@ import {
   HOST_CHANNEL_UNAFFECTED,
   wrapText,
 } from "@repo/core";
+import { isWithin, resolveWithin } from "@repo/core/safe-path";
 
 import {
   COMPOSE_DIR,
@@ -1022,7 +1023,7 @@ export function chooseHostChannelUser(input: {
   /** The account the previous run settled on, from `.env`. */
   carried?: string | null;
 }): HostChannelCandidate[] {
-  const keysFor = (home: string) => join(home, ".ssh", "authorized_keys");
+  const keysFor = (home: string) => resolveWithin(home, ".ssh", "authorized_keys");
   // An operator who names an account has overridden the decision, not seeded it: falling
   // back past a pin would hand them a channel on an account they deliberately excluded.
   if (input.pinned) {
@@ -1153,11 +1154,23 @@ function plannedHostChannel(
     hasPasswordlessSudo: invoker.uid !== 0 && hasPasswordlessSudo(),
     // A pinned account is dialed, never written to on our guess about its home: root's
     // file is fixed, and any other account's comes from the passwd database.
-    pinned: pin ? { user: pin, home: passwdHome(pin) ?? join("/home", pin) } : null,
+    pinned: pin ? { user: pin, home: passwdHome(pin) ?? fallbackHome(pin) } : null,
     sudoUser: invoker.uid === 0 ? sudoInvoker() : null,
     carried: cfg.hostSshUserCarried ?? null,
   });
   return { candidates, keyPath: join(COMPOSE_DIR, "host-ssh", "id_ed25519") };
+}
+
+/**
+ * `/home/<user>` for a pinned account the passwd database has no home for. The name is
+ * operator input (`--host-ssh-user`, or the pin it left in `.env`) and the result is
+ * where a key gets AUTHORIZED, so it has to stay a directory under /home.
+ */
+function fallbackHome(user: string): string {
+  if (!isWithin("/home", user) || resolveWithin("/home", user) === "/home") {
+    throw new Error(`--host-ssh-user: "${user}" is not a usable account name.`);
+  }
+  return resolveWithin("/home", user);
 }
 
 /** An account's home from the passwd database, or null when it has none/doesn't exist. */
@@ -1291,7 +1304,7 @@ function retireHostSshChannel(prev: Record<string, string>): void {
     ? ROOT_AUTHORIZED_KEYS
     : (() => {
         const home = passwdHome(account);
-        return home ? join(home, ".ssh", "authorized_keys") : invokerKeys;
+        return home ? resolveWithin(home, ".ssh", "authorized_keys") : invokerKeys;
       })();
   const weAreRoot = typeof process.getuid === "function" && process.getuid() === 0;
   const revoked = asRoot
@@ -3039,7 +3052,7 @@ function renderEnvAndCarried(
 export function sourceBuildDir(): string | null {
   const marker = readSourceInstall();
   if (!marker?.dir) return null;
-  const hasAll = BUILT_SERVICES.every((s) => existsSync(join(marker.dir, s.dockerfile)));
+  const hasAll = BUILT_SERVICES.every((s) => existsSync(resolveWithin(marker.dir, s.dockerfile)));
   return hasAll ? marker.dir : null;
 }
 

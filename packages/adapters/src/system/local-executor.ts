@@ -1,5 +1,5 @@
 import { reportCaughtError as observeCaughtError } from "@repo/core/diagnostics";
-import { exec, spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import {
   access,
   mkdir as fsMkdir,
@@ -25,15 +25,23 @@ import {
  * File operations use node:fs directly.
  */
 export class LocalExecutor implements CommandExecutor {
+  /**
+   * `CommandExecutor.exec` is a shell contract by design (the same string runs over SSH on
+   * remote servers), so callers own quoting: every interpolated value must go through
+   * `sq()`. Here the shell is launched via `execFile` with an explicit argv — the
+   * interpreter is the resolved local shell, never `child_process.exec`'s implicit
+   * `/bin/sh` lookup, and `command` is handed over as a single argument.
+   */
   async exec(command: string, opts?: { timeout?: number }): Promise<string> {
     return new Promise((resolve, reject) => {
-      const shell = getLocalShellPath();
-      exec(
-        command,
+      execFile(
+        getLocalShellPath(),
+        ["-c", command],
         {
           timeout: opts?.timeout ?? 30_000,
-          shell,
           env: getLocalExecEnv(),
+          shell: false,
+          windowsHide: true,
         },
         (err, stdout, stderr) => {
           // Fold BOTH streams into the failure error. Many CLIs (certbot in

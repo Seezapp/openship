@@ -19,7 +19,7 @@ export function resolvePackageManager(
   const { lock, yarnLock, yarnPath, scriptPolicy, ignoreYarnPath } = discovery;
   let localYarnVersion: string | undefined;
   if (manager === "yarn" && yarnPath && !ignoreYarnPath) {
-    localYarnVersion = versionOf(process.execPath, [yarnPath, "--version"]);
+    localYarnVersion = versionOf("node", [yarnPath, "--version"]);
     if (!localYarnVersion || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(localYarnVersion))
       throw new Error("Cannot verify the repository yarnPath version.");
   }

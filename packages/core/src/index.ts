@@ -1,6 +1,9 @@
 export * from "./types";
+export * from "./actions";
+export * from "./action-capabilities";
 export * from "./stacks";
 export * from "./package-manager-version";
+export * from "./stack-roles";
 export * from "./volumes";
 export * from "./compose-namespace";
 export * from "./compose-spec";
@@ -25,6 +28,7 @@ export {
 export * from "./system";
 export * from "./domain-retry";
 export * from "./utils";
+export * from "./runtime-version";
 export * from "./errors";
 export * from "./service-routing";
 export * from "./volume-spec";
@@ -107,3 +111,8 @@ export * from "./instance-handoff";
 export * from "./instance-environment";
 export { nodeImageForEngine } from "./node-runtime-version";
 export * from "./diagnostics/index";
+
+export * from "./github-installation-scope";
+
+export * from "./pricing/actions";
+export * from "./deployment-checks";

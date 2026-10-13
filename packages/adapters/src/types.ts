@@ -119,6 +119,10 @@ export interface BuildConfig {
   stack: string;
   /** Docker image for the build container (e.g. "node:22", "oven/bun:latest") */
   buildImage: string;
+  /** Frozen selected runtime version; its recipe checks the actual binary. */
+  runtimeVersion?: string;
+  /** Explicit custom production base; generated recipes verify compatibility. */
+  runtimeImageOverride?: boolean;
   /** Package manager (npm | yarn | pnpm | bun) */
   packageManager: string;
   /** Shell command to install dependencies */
@@ -279,6 +283,8 @@ export interface ImageArtifactConfig {
   resources: ResourceConfig;
   /** Refresh a mutable tag even when it is already present on the target. */
   forcePull?: boolean;
+  /** Refresh cached registry tags while preserving images built only on this host. */
+  refreshMutableTag?: boolean;
 }
 
 export interface DeployPublicEndpoint {
@@ -458,6 +464,8 @@ export interface ProvisionLock {
 export interface ContainerInfo {
   containerId: string;
   status: ContainerStatus;
+  /** Immutable image actually used by this container (Docker runtimes). */
+  imageId?: string;
   /** Container IP on the internal network */
   ip?: string;
   /** Mapped port on host (if applicable). The FIRST binding the daemon reports —
@@ -650,12 +658,14 @@ export interface ProxyRouteConfig extends BaseRouteConfig {
   /** Target container IP + port */
   targetUrl: string;
   staticRoot?: never;
+  notFound?: never;
 }
 
 export interface StaticRouteConfig extends BaseRouteConfig {
   /** Absolute path on the target machine to serve via Nginx root. */
   staticRoot: string;
   targetUrl?: never;
+  notFound?: never;
   /**
    * This root is being ADOPTED from a proxy we're taking over, not produced by an
    * Openship build.
@@ -672,7 +682,14 @@ export interface StaticRouteConfig extends BaseRouteConfig {
   staticRootAdopted?: boolean;
 }
 
-export type RouteConfig = ProxyRouteConfig | StaticRouteConfig;
+/** Only explicit proxy locations serve traffic; unmatched paths return 404. */
+export interface PathRouteConfig extends BaseRouteConfig {
+  notFound: true;
+  targetUrl?: never;
+  staticRoot?: never;
+}
+
+export type RouteConfig = ProxyRouteConfig | StaticRouteConfig | PathRouteConfig;
 
 /** An operator-supplied certificate to install verbatim (no ACME). */
 export interface ManualCert {

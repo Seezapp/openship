@@ -13,17 +13,19 @@ export function DeploymentHeader({
   serviceCount,
   decisionPending = false,
   isCompose = false,
+  warningResolved = false,
 }: {
   onRedeploy: () => void | Promise<string | null>;
   serviceCount?: number;
   decisionPending?: boolean;
   isCompose?: boolean;
+  warningResolved?: boolean;
 }) {
   const { config, state, deploymentStatus } = useDeployment();
   const { t } = useI18n();
   const copy = t.importProject.deploymentProcessing;
   const projectId = state.projectId || config.projectId;
-  const hasWarning = deploymentStatus === "ready" && !!state.warningMessage;
+  const hasWarning = deploymentStatus === "ready" && !!state.warningMessage && !warningResolved;
   const requiresPortReview =
     deploymentStatus === "ready" &&
     state.portCheck.some(
@@ -73,7 +75,7 @@ export function DeploymentHeader({
         className="flex min-w-0 items-center gap-3 text-sm text-muted-foreground"
       >
         <Link
-          href={projectId ? `/projects/${projectId}/deployments` : "/deployments"}
+          href={projectId ? `/projects/${projectId}/deployments` : "/monitoring?tab=deployments"}
           className="inline-flex shrink-0 items-center gap-1.5 transition-colors hover:text-foreground"
         >
           <UiIcon name="arrow-left" className="size-4 rtl:rotate-180" aria-hidden />

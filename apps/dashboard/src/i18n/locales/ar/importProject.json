@@ -75,6 +75,9 @@
       "onFailureWarn": "إبقاء النشر مباشرًا ووسمه للمراجعة",
       "onFailureFail": "إفشال النشر مع إبقاء الإصدار السابق يعمل"
     },
+    "runtimeVersionLabel": "إصدار بيئة التشغيل",
+    "runtimeVersionDefault": "الافتراضي",
+    "runtimeVersionDesc": "يستخدم صور بناء وتشغيل متوافقة مع الإصدار المحدد. يتطلب بناء Docker يُنشئه Openship.",
     "buildImageLabel": "صورة البناء",
     "buildImageDesc": "صورة حاوية البناء للبناء السحابي أو على الخادم. تجاوزها عندما تكون الصورة الأساسية المكتشفة خاطئة.",
     "productionPathsLabel": "مسارات الإنتاج",
@@ -111,7 +114,9 @@
     "releaseDescription": "أوامر اختيارية بعد البناء. فشلها يوقف النشر. لتطبيقات Docker وBare فقط.",
     "releaseCommand": "الأمر {number}",
     "addReleaseCommand": "إضافة أمر",
-    "removeReleaseCommand": "حذف الأمر {number}"
+    "removeReleaseCommand": "حذف الأمر {number}",
+    "runtimeImageLabel": "صورة التشغيل",
+    "runtimeImageDesc": "صورة أساسية اختيارية للتشغيل عبر Docker. يجب أن تتوافق مع بيئة التشغيل ووصفة البناء؛ اتركها فارغة لاستخدام الصورة الافتراضية."
   },
   "projectSettings": {
     "framework": "إطار العمل",
@@ -362,6 +367,17 @@
       "openSettings": "فتح الإعدادات",
       "skipError": "تعذّر تجاهل هذا التنبيه. يرجى المحاولة مرة أخرى."
     }
+  },
+  "deploymentHealth": {
+    "recheck": "إعادة فحص الصحة",
+    "checking": "جارٍ الفحص…",
+    "healthy": "الخدمات سليمة",
+    "atDeployment": "تحذير سُجّل وقت النشر",
+    "currentHealth": "حالة الخدمات الحالية",
+    "startupHint": "إذا كان التطبيق لا يزال يبدأ، انتظر قليلًا ثم أعد الفحص. إذا استمر في إعادة التشغيل أو ظهر خطأ، افتح سجلاته لمعرفة السبب.",
+    "viewLogs": "عرض السجلات",
+    "unavailable": "تعذّر التحقق من الصحة الحالية. أعد الفحص عندما يصبح الخادم متاحًا.",
+    "historical": "لم يعد هذا النشر نشطًا. افتح المشروع لفحص خدماته الحالية."
   },
   "composeDeployment": {
     "title": {

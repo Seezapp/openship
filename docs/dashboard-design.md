@@ -257,7 +257,6 @@ cancellations and unfinished attempts from success rate; count queued attempts a
 Each project retains its own history.
 Old `/deployments` links redirect to Monitoring while preserving filters.
 
-
 Instance relocation has one entry in **Settings → Instance → Instance location**. Keep moving
 the control plane, connecting a Desktop, and backup/archive recovery distinct. Reuse the
 shared server selector and option cards for API-only versus API + dashboard. Show progress
@@ -659,6 +658,10 @@ Migration retries reuse the shared destination picker after a fresh scan, even w
 from an existing run. Keep loading, fetch errors and empty inventory distinct, and preserve
 the selected destination's validation and transfer review before enabling Migrate.
 
+Catalog brand artwork is bundled in both dashboard and website public assets and mapped in
+the shared `AppLogo` renderer. Preserve upstream attribution and keep setup behavior in
+catalog definitions, rather than adding app-specific dashboard branches.
+
 ## Catalog forms
 
 Use [AppSettingsForm](../apps/dashboard/src/components/app-settings/AppSettingsForm.tsx) for
@@ -683,6 +686,12 @@ Use focused behavior tests for changes to field selection, validation, or payloa
 spacing adjustment needs visual verification, not a test that asserts a CSS class string.
 
 ## Mail webmail recovery
+
+Cloud's Emails entry connects an existing IMAP/SMTP backend through the standard
+webmail app installer. Keep its client card beside a compact Managed email / Coming
+soon notice. Cloud mail entry points must not mount local server setup, registry or
+administration requests. Desktop and self-hosted instances retain the normal mail
+console and setup flow. Navigation remains Emails across these modes.
 
 When a mail registration has lost its webmail link, the Deploy webmail screen
 shows existing catalog apps that already use that mail hostname on the mail

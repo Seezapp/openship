@@ -12,7 +12,9 @@ import {
   composeMountIssues,
   composeMountToSpec,
   composePortToSpec,
+  parseComposeDurationNs,
   parseComposeNamespace,
+  parseContainerHosts,
   parseEnvFile,
 } from "@repo/core";
 import type { ComposeAdvanced, ComposeHealthcheck, ComposeNamespaceField } from "@repo/core";
@@ -604,6 +606,8 @@ function parseAdvanced(
 
   const pidMode = parseNamespaceField(svc.pid, "pid", env, serviceName, unsupported);
   if (pidMode) advanced.pidMode = pidMode;
+  const extraHosts = parseContainerHosts(svc.extra_hosts, (value) => interpolateComposeString(value, env));
+  if (extraHosts !== undefined) advanced.extraHosts = extraHosts;
 
   // Entrypoint (#575), on exactly the terms `parseCommand` uses for `command`:
   // list → argv verbatim, string → shell-word-split (no implicit `sh -c`).
@@ -632,6 +636,26 @@ function parseAdvanced(
         ? String(rawGrace)
         : undefined;
   if (grace) advanced.stopGracePeriod = grace;
+
+  // The runtime applies a duration it can't read as unset, so Docker's default
+  // takes over: 10 seconds for a grace period meant to be longer. Say so at
+  // parse time instead of letting the first stop discover it.
+  const durations = [
+    ["stop_grace_period", advanced.stopGracePeriod],
+    ["healthcheck.interval", advanced.healthcheck?.interval],
+    ["healthcheck.timeout", advanced.healthcheck?.timeout],
+    ["healthcheck.start_period", advanced.healthcheck?.startPeriod],
+  ] as const;
+  for (const [field, value] of durations) {
+    if (value === undefined || parseComposeDurationNs(value) !== undefined) continue;
+    unsupported.push({
+      service: serviceName,
+      field,
+      reason:
+        `${field} is not a duration like "90s" or "1m30s", so it is ignored and ` +
+        `Docker's default applies.`,
+    });
+  }
 
   return Object.keys(advanced).length > 0 ? advanced : undefined;
 }

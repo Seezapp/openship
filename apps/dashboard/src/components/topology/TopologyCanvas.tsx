@@ -89,6 +89,13 @@ export function TopologyResourceIcon({
       />
     );
   if (resource.volume) return <UiIcon name="hard-drive" className={className} />;
+  if (resource.role)
+    return (
+      <UiIcon
+        name={resource.role.kind === "scheduler" ? "clock" : "terminal"}
+        className={className}
+      />
+    );
   if (resource.database || (resource.clusterPod && resource.tone !== "service")) {
     return <ResourceIcon kind={resource.tone} className={className} />;
   }
@@ -115,6 +122,63 @@ export function TopologyStatus({ state }: { state: TopologyState }) {
 
 const Resource = memo(function Resource({ data }: NodeProps<ResourceFlowNode>) {
   const { resource, onOpen, action } = data;
+  if (resource.replicaGroup) {
+    const voters =
+      resource.database?.observation?.pods.filter((pod) => pod.role === "sentinel").length ?? 0;
+    return (
+      <article
+        className="h-full w-full text-start"
+        aria-label={`${resource.name}, database settings`}
+      >
+        <Handle
+          className="topology-port"
+          style={{ top: 24 }}
+          type="target"
+          position={Position.Left}
+          isConnectable={false}
+        />
+        <div className="flex h-14 items-center gap-3 border-b border-border/60 px-3">
+          <TopologyResourceIcon
+            resource={resource}
+            className="size-5 shrink-0 text-muted-foreground"
+          />
+          <div className="min-w-0 flex-1">
+            <h3
+              className="truncate text-sm font-medium text-foreground"
+              title={`Configure ${resource.name}`}
+            >
+              {resource.name}
+            </h3>
+            <p className="truncate text-xs text-muted-foreground" title={resource.description}>
+              {resource.database?.config.engine === "postgres" ? "PostgreSQL" : "Redis"}
+              {voters > 0 && ` · ${voters} failover voter${voters === 1 ? "" : "s"}`}
+            </p>
+          </div>
+          <TopologyStatus state={resource.state} />
+          <Button
+            variant="ghost"
+            size="icon"
+            className="nodrag nopan shrink-0"
+            aria-label={`View all instances of ${resource.name}`}
+            title="View all instances"
+            onClick={(event) => {
+              event.stopPropagation();
+              onOpen(resource.id);
+            }}
+          >
+            <UiIcon name="layers" />
+          </Button>
+        </div>
+        <Handle
+          className="topology-port"
+          style={{ top: 24 }}
+          type="source"
+          position={Position.Right}
+          isConnectable={false}
+        />
+      </article>
+    );
+  }
   const isService = resource.kind === "service";
   const canInspectInstance =
     (isService && !!resource.container?.containerId && !resource.pending) ||
@@ -188,9 +252,11 @@ const Resource = memo(function Resource({ data }: NodeProps<ResourceFlowNode>) {
                 ? action.ariaLabel
                 : canInspectInstance
                   ? `View instances of ${resource.name}`
-                  : resource.clusterPod
-                    ? `Inspect ${resource.name}`
-                    : `Configure ${resource.name}`
+                  : resource.role
+                    ? `Inspect role ${resource.name}`
+                    : resource.clusterPod
+                      ? `Inspect ${resource.name}`
+                      : `Configure ${resource.name}`
             }
           >
             <span className="flex min-w-0 items-center gap-2 truncate">
@@ -201,13 +267,15 @@ const Resource = memo(function Resource({ data }: NodeProps<ResourceFlowNode>) {
                 ? action.label
                 : canInspectInstance
                   ? "Instances"
-                  : resource.clusterPod
-                    ? "Inspect instance"
-                    : resource.kind === "traffic"
-                      ? "View traffic"
-                      : resource.kind === "linked"
-                        ? "View connection"
-                        : "Configuration"}
+                  : resource.role
+                    ? "Role details"
+                    : resource.clusterPod
+                      ? "Inspect instance"
+                      : resource.kind === "traffic"
+                        ? "View traffic"
+                        : resource.kind === "linked"
+                          ? "View connection"
+                          : "Configuration"}
             </span>
             <span className="flex shrink-0 items-center gap-2">
               {applicationRelease ? (
@@ -424,6 +492,7 @@ function Canvas({
           ...existing,
           id: resource.id,
           type: "resource" as const,
+          className: resource.replicaGroup ? "topology-replica-group" : undefined,
           position,
           parentId: resource.parentId,
           extent: resource.parentId ? ("parent" as const) : undefined,

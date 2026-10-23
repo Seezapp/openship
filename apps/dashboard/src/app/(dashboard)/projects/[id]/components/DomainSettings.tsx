@@ -1,6 +1,7 @@
 "use client";
 
-import { DomainIngressSettings, IngressDestinationNotice } from "@/components/ingress/DomainIngressSettings";
+import { RouteProtectionButton } from "@/components/routing/RouteProtectionButton";
+import { DomainIngressMenu, IngressDestinationNotice } from "@/components/ingress/DomainIngressSettings";
 import { reportCaughtError as observeCaughtError, diagnostics as errorDiagnostics } from "@repo/core/diagnostics";
 import { Icon as UiIcon, type IconName } from "@repo/ui/icons";
 import { getPortCheckIssue } from "@repo/core";
@@ -59,6 +60,8 @@ interface DnsRecord {
   name?: string;
   value: string;
 }
+
+type RoutingEndpoint = Parameters<typeof resolvePublicEndpointHostname>[0];
 
 type DomainTone = "success" | "warning" | "danger" | "neutral";
 type PortHint = Pick<PortCheckUI, "port" | "serviceName" | "loopbackOnly">;
@@ -373,7 +376,6 @@ export const DomainSettings = ({ serviceScope, onRoutesChanged }: DomainSettings
   // saved once cloud is available. Single source: the `managed-project-domain`
   // capability (copy from the shared registry).
   const freeNeedsCloud = () => requireCloud("managed-project-domain", { domain: baseDomain });
-  const openEdgeModal = useEdgeModal();
   const resourceKey = useCloudResourceKey();
   const routingLogStorageKey = `openship:routing-log:dismissed:${resourceKey}:${id}`;
   const seenRoutingSession = useRef<string | null>(null);
@@ -444,6 +446,7 @@ export const DomainSettings = ({ serviceScope, onRoutesChanged }: DomainSettings
   }, [routingOperation]);
   const openRoutingRetry = useRoutingRetryModal(presentRoutingRetry);
   const openVerifyModal = useVerifyModal(presentRoutingRetry);
+  const openEdgeModal = useEdgeModal(presentRoutingRetry);
   const retryRouting = () => openRoutingRetry(String(id), { onSession: rememberRoutingSession });
   useEffect(() => {
     const sessionId = projectData.routingRetry?.sessionId;
@@ -526,7 +529,7 @@ export const DomainSettings = ({ serviceScope, onRoutesChanged }: DomainSettings
   const openEdge = useCallback(
     () =>
       openEdgeModal(id, {
-        onDone: () => {
+        onSettled: () => {
           invalidateProjectCaches(id);
           router.refresh();
           void checkEdge();
@@ -1115,6 +1118,7 @@ export const DomainSettings = ({ serviceScope, onRoutesChanged }: DomainSettings
         isCustom
           ? interpolate(t.projectSettings.domains.toast.addedCustom, { label })
           : interpolate(t.projectSettings.domains.toast.addedFree, { label }),
+        { deferHttps: !!newDnsSetup },
       );
       if (!ok) return;
 
@@ -1422,11 +1426,8 @@ export const DomainSettings = ({ serviceScope, onRoutesChanged }: DomainSettings
 
   // A project with a deployment but NO public route yet has no edge (OpenResty)
   // installed — e.g. a just-migrated image-only services stack, or an
-  // internal-only stack deployed with no domains. OpenResty is only ever
-  // ensured by a DEPLOY (the single routing-ensure pipe, and the only place the
-  // edge-takeover consent modal can show). So adding the FIRST route must kick a
-  // deploy; a normal already-routed project keeps the live best-effort apply
-  // (no redeploy). Self-hosted only — cloud routes via the cloud edge.
+  // internal-only stack deployed with no domains. The first published route
+  // needs the edge consent/install operation. Cloud owns its edge separately.
   const isEdgeless = () =>
     selfHosted &&
     !isCloudProject &&
@@ -1434,13 +1435,35 @@ export const DomainSettings = ({ serviceScope, onRoutesChanged }: DomainSettings
     domainSummaries.length === 0 &&
     !services.some((s) => s.enabled && s.exposed);
 
-  // First route on an edge-less project: instead of a full redeploy, open the
-  // edge-consent flow — it installs/owns OpenResty on the project's server and
-  // applies the routes reload-free (surfacing the SAME 80/443 takeover modal if
-  // a foreign proxy holds them). No container rebuild, so a migrated attach-live
-  // stack is never recreated. The route is already saved when this runs.
-  const publishFirstRoute = async () => {
-    openEdge();
+  // Project and service saves finish through the same inline operation viewer.
+  // Edge setup already verifies domains after preparing the proxy. An existing
+  // edge uses the project's authorized routing/HTTPS retry, never a second ACME
+  // implementation or an app rebuild. DNS-01 setup keeps its explicit flow.
+  const publishSavedRoutes = (
+    wasEdgeless: boolean,
+    routes: readonly RoutingEndpoint[],
+    previous: readonly RoutingEndpoint[],
+    deferHttps = false,
+  ) => {
+    if (!projectData.activeDeploymentId || routes.length === 0) return;
+    if (wasEdgeless) {
+      openEdge();
+      return;
+    }
+    if (deferHttps) return;
+    const previousHosts = new Set(
+      previous.map((route) => resolvePublicEndpointHostname(route, baseDomain)),
+    );
+    const addedCustomDomain = routes.some((route) => {
+      const hostname = resolvePublicEndpointHostname(route, baseDomain);
+      return (
+        route.domainType === "custom" &&
+        !!hostname &&
+        !previousHosts.has(hostname) &&
+        !usesDnsSetup(hostname)
+      );
+    });
+    if (addedCustomDomain) retryRouting();
   };
 
   // Persist a specific ordering of the project's public endpoints. Endpoint
@@ -1451,6 +1474,7 @@ export const DomainSettings = ({ serviceScope, onRoutesChanged }: DomainSettings
   const persistPublicEndpoints = async (
     endpoints: PublicEndpoint[],
     successMessage = t.projectSettings.domains.toast.routingUpdated,
+    options: { deferHttps?: boolean } = {},
   ): Promise<boolean> => {
     const wasEdgeless = isEdgeless();
     const payload = endpoints
@@ -1508,9 +1532,7 @@ export const DomainSettings = ({ serviceScope, onRoutesChanged }: DomainSettings
       if (id) invalidateProjectCaches(id);
       showToast(successMessage, "success", t.projectSettings.domains.toast.domainsTitle);
       setIsEditingDomains(false);
-      // First route on an edge-less project → deploy to install OpenResty + show
-      // the takeover modal. Navigates away to the build screen.
-      if (wasEdgeless) await publishFirstRoute();
+      publishSavedRoutes(wasEdgeless, payload, draftPublicEndpoints, options.deferHttps);
       return true;
     } catch (error) {
       showToast(getApiErrorMessage(error, t.projectSettings.domains.toast.routingUpdateFailed), "error", t.projectSettings.domains.toast.domainsTitle);
@@ -1645,6 +1667,8 @@ export const DomainSettings = ({ serviceScope, onRoutesChanged }: DomainSettings
     patch: Partial<ServiceInput>,
   ): Promise<boolean> => {
     const wasEdgeless = isEdgeless();
+    const current = services.find((service) => service.id === serviceId);
+    const previous = current ? configuredServiceEndpoints(current) : [];
     setRouteSavingServiceId(serviceId);
     try {
       const result = await servicesApi.update(id, serviceId, patch);
@@ -1657,9 +1681,13 @@ export const DomainSettings = ({ serviceScope, onRoutesChanged }: DomainSettings
         observeCaughtError(diagnosticFailure, "dashboard/app/(dashboard)/projects/[id]/components/DomainSettings");
       });
       showToast(t.projectSettings.domains.toast.routingUpdated, "success", t.projectSettings.domains.toast.domainsTitle);
-      // First exposed route on an edge-less project → deploy to install
-      // OpenResty + show the takeover modal (navigates to the build screen).
-      if (wasEdgeless && patch.exposed) await publishFirstRoute();
+      if (current?.enabled && (patch.exposed ?? current.exposed)) {
+        publishSavedRoutes(
+          wasEdgeless,
+          patch.publicEndpoints ?? previous,
+          current.exposed ? previous : [],
+        );
+      }
       return true;
     } catch (error) {
       errorDiagnostics.error("dashboard/app/(dashboard)/projects/[id]/components/DomainSettings", "Failed to update service route:", error);
@@ -1992,6 +2020,8 @@ export const DomainSettings = ({ serviceScope, onRoutesChanged }: DomainSettings
       <DomainOverviewCard
         key={item.id}
         domain={item}
+        protectionControl={<RouteProtectionButton hostname={item.hostname} projectId={String(id)}
+          unsupported={isCloudProject || projectData.deployTarget === "cluster" || !selfHosted || !!item.externalIngress || item.hostname.endsWith(`.${baseDomain}`) || item.hostname.startsWith("*.")} />}
         menuActions={menuActions}
         sslActionBusy={isRenewing || isRechecking}
         sslActionLabel={
@@ -2021,7 +2051,20 @@ export const DomainSettings = ({ serviceScope, onRoutesChanged }: DomainSettings
         onCopy={handleCopy}
         portHint={portHintFor(item.mappedPort, item.serviceId)}
         outputHint={outputHintFor(item.targetPath)}
-        ingressAction={item.domainId && projectData.serverId && !isCloudProject && !item.hostname.toLowerCase().endsWith(`.${baseDomain}`) ? <DomainIngressSettings domainId={item.domainId} hostname={item.hostname} serverId={projectData.serverId} onChanged={() => { invalidateProjectCaches(id); router.refresh(); }} /> : undefined}
+        ingressSettings={
+          item.domainId &&
+          projectData.serverId &&
+          !isCloudProject &&
+          !item.hostname.toLowerCase().endsWith(`.${baseDomain}`)
+            ? {
+                serverId: projectData.serverId,
+                onChanged: () => {
+                  invalidateProjectCaches(id);
+                  router.refresh();
+                },
+              }
+            : undefined
+        }
       />
     );
   };
@@ -3104,6 +3147,7 @@ function DiagnosablePill({
 
 function DomainOverviewCard({
   domain,
+  protectionControl,
   menuActions = [],
   sslActionBusy = false,
   sslActionLabel,
@@ -3119,9 +3163,10 @@ function DomainOverviewCard({
   autoOpenRecords = false,
   portHint,
   outputHint,
-  ingressAction,
+  ingressSettings,
 }: {
   domain: DomainSummaryItem;
+  protectionControl?: React.ReactNode;
   /** Secondary actions (edit, renew, …) collapsed into a ⋯ menu. Visit is a
    *  plain icon; Verify is a direct inline button below, not a menu item. */
   menuActions?: MenuAction[];
@@ -3147,7 +3192,7 @@ function DomainOverviewCard({
   portHint?: PortHint | null;
   /** Live static-output advisory — which of the three static-404 shapes this is. */
   outputHint?: OutputHint | null;
-  ingressAction?: React.ReactNode;
+  ingressSettings?: { serverId: string; onChanged: () => void };
 }) {
   const { t, locale } = useI18n();
   const d = t.projectSettings.domains;
@@ -3214,6 +3259,7 @@ function DomainOverviewCard({
           <p className="mt-1 text-[12px] text-muted-foreground">{domain.typeLabel}</p>
         </div>
         <div className="flex shrink-0 items-center gap-0.5">
+          {protectionControl}
           {domain.liveUrl && !domain.hostname.startsWith("*.") ? (
             <a
               href={domain.liveUrl}
@@ -3226,7 +3272,22 @@ function DomainOverviewCard({
               <UiIcon name="arrow-up-right" className="size-4" />
             </a>
           ) : null}
-          {menuActions.length > 0 ? <DropdownMenu actions={menuActions} align="right" triggerLabel={`${t.projectDetail.services.detail.networking.manage} ${domain.hostname}`} /> : null}
+          {ingressSettings && domain.domainId ? (
+            <DomainIngressMenu
+              domainId={domain.domainId}
+              hostname={domain.hostname}
+              serverId={ingressSettings.serverId}
+              onChanged={ingressSettings.onChanged}
+              actions={menuActions}
+              triggerLabel={`${t.projectDetail.services.detail.networking.manage} ${domain.hostname}`}
+            />
+          ) : menuActions.length > 0 ? (
+            <DropdownMenu
+              actions={menuActions}
+              align="right"
+              triggerLabel={`${t.projectDetail.services.detail.networking.manage} ${domain.hostname}`}
+            />
+          ) : null}
         </div>
       </div>
 
@@ -3272,7 +3333,6 @@ function DomainOverviewCard({
             />
           }
         />
-        {ingressAction && <InfoRow label={t.ingress.title} value={ingressAction} />}
         {/* SSL action feedback. The renew/recheck triggers live in the ⋯ menu,
             which unmounts the moment it's clicked — so without this the operator
             gets no signal for the seconds the request takes. Sits next to the SSL

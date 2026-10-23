@@ -350,6 +350,7 @@ interface Workload {
   serviceKey: string;
   serviceName: string;
   containerId: string;
+  trackedContainerId?: string | null;
   /** False when the operator stopped this specific service. */
   expectRunning: boolean;
 }
@@ -698,7 +699,12 @@ async function sweepOnce(opts?: HealthSweepOptions): Promise<HealthWatchSummary>
     // containers. Skipped WITHOUT retiring — an open incident stays open, because
     // we genuinely don't know anything about this project right now.
     const newest = latestDeps.get(project.id) ?? dep;
-    if (deploymentIsInFlight(newest) || now - newest.updatedAt.getTime() < DEPLOY_GRACE_MS) {
+    const handoverPending = newest.roleHandover && newest.roleHandover.phase !== "complete";
+    if (
+      deploymentIsInFlight(newest) ||
+      handoverPending ||
+      now - newest.updatedAt.getTime() < DEPLOY_GRACE_MS
+    ) {
       unknownCandidates.push({ project, dep, meta, serverId: target.serverId });
       continue;
     }
@@ -1402,7 +1408,7 @@ function inspectRank(container: ListedContainer | null): number {
  * Which containers on this host does this project expect to be up?
  *
  * Compose/monorepo projects: one workload per service the ACTIVE release
- * deployed. Single-app projects: the deployment's own container.
+ * deployed. Single-app projects: the deployment's web and recorded role containers.
  */
 async function resolveWorkloads(
   candidate: Candidate,
@@ -1415,15 +1421,28 @@ async function resolveWorkloads(
     // Single-app. `runsAsContainer` is load-bearing: a bare deploy writes its
     // systemd handle into `containerId`, and inspecting that id would report a
     // missing container and page about a perfectly healthy service.
-    if (!dep.containerId || !runsAsContainer(meta)) return [];
+    if (!runsAsContainer(meta)) return [];
     return [
-      {
+      ...(dep.containerId
+        ? [
+            {
+              serviceId: null,
+              serviceKey: SINGLE_APP_KEY,
+              serviceName: project.name,
+              containerId: dep.containerId,
+              expectRunning: true,
+            },
+          ]
+        : []),
+      ...(dep.roleContainers ?? []).map((ref) => ({
         serviceId: null,
-        serviceKey: SINGLE_APP_KEY,
-        serviceName: project.name,
-        containerId: dep.containerId,
+        // Stable across releases, like __app__: a new container must not open
+        // another incident for the same broken replica. Service IDs use svc_.
+        serviceKey: `__role__:${ref.role}:${ref.replica}`,
+        serviceName: `${ref.role} · ${ref.replica}`,
+        containerId: ref.containerId,
         expectRunning: true,
-      },
+      })),
     ];
   }
 
@@ -1454,6 +1473,7 @@ async function resolveWorkloads(
       serviceKey: service.id,
       serviceName: service.name,
       containerId,
+      trackedContainerId: hint.containerId,
       // Gate 2. `service_deployment.status` is never read for LIVENESS — but it
       // is the only record of INTENT, written by stopServiceContainer.
       expectRunning: service.enabled !== false && hint.status !== "stopped",
@@ -1703,6 +1723,8 @@ async function evaluate(args: {
         exitCode: sample?.exitCode ?? null,
         restartCount: sample?.restartCount ?? existing.restartCount,
         containerId: workload.containerId,
+        deploymentId: candidate.dep.id,
+        trackedContainerId: workload.trackedContainerId ?? null,
       });
     }
     return;
@@ -1717,6 +1739,8 @@ async function evaluate(args: {
     serviceName: workload.serviceName,
     serverId: candidate.serverId,
     containerId: workload.containerId,
+    deploymentId: candidate.dep.id,
+    trackedContainerId: workload.trackedContainerId ?? null,
   };
 
   // Read the log tail ONLY when this will produce a message. Otherwise a box full

@@ -1,3 +1,4 @@
+import { assertRouteProtectionTarget } from "../../lib/route-protection";
 /**
  * Build service — build session LIFECYCLE + config/snapshot helpers.
  *
@@ -43,6 +44,7 @@ import {
   looksLikeSecretKey,
   mergeAdvanced,
   resolveProjectVolumes,
+  runtimeRoleDefinition,
   resolveTierResources,
   type StackId,
   type DeployTarget,
@@ -93,7 +95,7 @@ import {
   assertCloudDeploymentLimits,
 } from "../../lib/plan-guard";
 import type { ExecutionContext as RequestContext } from "@repo/platform";
-import { type PortCheckResult } from "../../lib/deployment-runtime";
+import { resolveEffectiveTarget, type PortCheckResult } from "../../lib/deployment-runtime";
 import { requireOrgServer } from "../../lib/server-target";
 import * as sessionManager from "./session-manager";
 import {
@@ -212,6 +214,11 @@ export async function runDeploymentPreflight(
 
 /** Config snapshot stored in deployment.meta - self-contained build+deploy config. */
 export interface DeploymentConfigSnapshot {
+  /** Worker-authored completed-image receipt and one-shot retry provenance. */
+  completedBuildArtifacts?: import("./deployment-artifacts").DeploymentArtifacts;
+  retryBuildFromDeploymentId?: string;
+  /** Set by lifecycle persistence after encrypted configuration bypasses log redaction. */
+  configurationSecretsPreserved?: boolean;
   /** Idempotency for an explicit capacity adjustment; never accepted over HTTP. */
   capacityAdjustment?: { key: string; requestHash: string };
   /** Internal Cloud service-slot reservation, derived at queue creation. */
@@ -315,6 +322,11 @@ export interface DeploymentConfigSnapshot {
   adopt?: boolean;
   /** Project services fan-out mode captured for this deployment. */
   serviceDeploymentMode?: "services" | "single";
+  /** Derived by the worker before infrastructure reconciliation; automatic
+   * application failure/recovery must not destroy these independent services. */
+  attachedInfrastructureServiceIds?: string[];
+  /** Canonical app identity shared by artifact admission and the service snapshot. */
+  primaryAppServiceName?: string;
   /**
    * Deployable services captured at deploy request time. Mixed shape:
    * compose-source rows AND monorepo sub-app rows travel through the
@@ -333,6 +345,15 @@ export interface DeploymentConfigSnapshot {
   /** Env-only refresh of a single app. Reuse this active deployment's retained
    * artifact and fail closed if it is unavailable — never fall into a rebuild. */
   refreshAppDeploymentId?: string;
+  /** Internal configuration rollout: preserve web and reuse equivalent roles. */
+  roleConfiguration?: {
+    sourceDeploymentId: string;
+    webContainerId: string;
+    webOwnerDeploymentId: string;
+    imageId: string;
+  };
+  /** Creation owner of a web container carried across configuration revisions. */
+  webOwnerDeploymentId?: string;
   /** STATIC twin: a retained release DIRECTORY on the host to promote again
    *  (static releases have no image). Set by a rollback restore. */
   handoverStaticDir?: string;
@@ -493,9 +514,9 @@ export function buildConfigSnapshot(project: Project, branch?: string): Deployme
       ? { releaseCommands: project.releaseCommands as string[] }
       : {}),
     // Same rule: only a non-empty list, so a project without roles snapshots
-    // byte-identical to before. when/unless are preset-only and never frozen.
+    // byte-identical to before. when/unless/slot are preset-only and never frozen.
     ...(Array.isArray(project.roles) && project.roles.length > 0
-      ? { roles: project.roles.map(({ when: _when, unless: _unless, ...role }) => role) }
+      ? { roles: project.roles.map(runtimeRoleDefinition) }
       : {}),
     resources: (project.resources as ResourceConfig) || null,
     buildResources: (project.buildResources as ResourceConfig) || null,
@@ -1003,9 +1024,10 @@ async function resolveLifecycleSourceEnv(
  * this helper because resolveServicePipelineMode returns false for it. */
 function freezeResolvedServicePipeline(
   snapshot: DeploymentConfigSnapshot,
-  resolved: { useServicePipeline: boolean; servicePreflightServices: DeployableService[] },
+  resolved: { useServicePipeline: boolean; servicePreflightServices: DeployableService[]; primaryApp?: { app: { name: string } } },
 ): void {
-  if (!resolved.useServicePipeline) return;
+  snapshot.primaryAppServiceName = resolved.primaryApp?.app.name;
+  if (!resolved.useServicePipeline && !resolved.primaryApp) return;
   snapshot.serviceDeploymentMode ??= "services";
   if (!snapshot.composeServices?.length && resolved.servicePreflightServices.length > 0) {
     snapshot.composeServices = resolved.servicePreflightServices;
@@ -1083,6 +1105,8 @@ export async function resolveSnapshotTarget(
   else if (project.serverId) deployTarget = "server";
   else if (activeMeta?.deployTarget) deployTarget = activeMeta.deployTarget === "cluster" ? "local" : activeMeta.deployTarget;
   else if (activeMeta?.serverId) deployTarget = "server";
+
+  await assertRouteProtectionTarget(project, deployTarget);
 
   if (project.clusterId && override?.deployTarget && override.deployTarget !== "cluster")
     throw new AppError("Change this project's cluster target in Topology before deploying to a different target.", 409, "CLUSTER_TARGET_CONFLICT");
@@ -1335,7 +1359,9 @@ export async function createQueuedDeployment(opts: Parameters<typeof createQueue
 async function createQueuedDeploymentUnlocked(opts: {
   actionRequestId?: string;
   actionLeaseOwner?: string;
+  previewAdmission?: { id: string; token: string };
   /** Internal, reviewed resource edit committed with deployment admission. */
+  roleChanges?: import("@repo/db").DeploymentRoleChanges;
   resourceChanges?: DeploymentResourceChanges;
   /** Attribution only; ownership/authorization still comes from organizationId. */
   analyticsActor?: Pick<RequestContext, "userId" | "source">;
@@ -1349,6 +1375,8 @@ async function createQueuedDeploymentUnlocked(opts: {
   framework: string;
   meta: DeploymentConfigSnapshot;
   envVars: Record<string, string> | null;
+  /** Existing app URL when a configuration revision keeps its primary container. */
+  preservedUrl?: string | null;
   commitSha?: string;
   commitMessage?: string;
   trigger?: string;
@@ -1402,6 +1430,7 @@ async function createQueuedDeploymentUnlocked(opts: {
   // triggerDeployment (webhook push, incoming webhooks, service-connection
   // auto-redeploy). Both gates no-op unless CLOUD_MODE.
   await assertPlanAllowsDeployShape(opts.organizationId, {
+    serverId: meta.serverId,
     workload: snapshotToClass(meta).workload,
     targetServiceIds: meta.targetServiceIds ?? null,
     // Workload alone is not enough: a compose/services project deploying ALL its
@@ -1420,9 +1449,9 @@ async function createQueuedDeploymentUnlocked(opts: {
   const needsBuild = meta.composeServices?.length
     ? cloudDockerNeedsBuild(meta.composeServices, strictRefreshImages(meta))
     : !meta.refreshAppDeploymentId && !meta.releaseImageRef;
-  if (needsBuild) await assertBuildMinutesAvailable(opts.organizationId, meta.managedWorkspaceId ?? null);
+  if (needsBuild) await assertBuildMinutesAvailable(opts.organizationId, meta.managedWorkspaceId ?? null, meta.serverId);
   const insertDeployment = async () => {
-    if (env.CLOUD_MODE) {
+    if (env.CLOUD_MODE && resolveEffectiveTarget("cloud", meta) === "cloud") {
       const project = await repos.project.findByIdInOrganization(opts.projectId, opts.organizationId);
       if (!project) throw new AppError("Project not found", 404, "PROJECT_NOT_FOUND");
       const mode = await resolveServicePipelineMode(project, meta);
@@ -1482,6 +1511,7 @@ async function createQueuedDeploymentUnlocked(opts: {
       trigger: opts.trigger ?? "manual",
       actionRequestId: opts.actionRequestId,
       environment: opts.environment,
+      ...(opts.preservedUrl !== undefined ? { url: opts.preservedUrl } : {}),
       framework: opts.framework,
       status: "queued",
       // Release/dist deploy identity, from the resolved snapshot. Like commit_sha
@@ -1502,6 +1532,8 @@ async function createQueuedDeploymentUnlocked(opts: {
     }];
     if (opts.resourceChanges || opts.actionLeaseOwner) admission[1] = opts.resourceChanges;
     if (opts.actionLeaseOwner) admission[2] = opts.actionLeaseOwner;
+    if (opts.roleChanges) admission[3] = opts.roleChanges;
+    if (opts.previewAdmission) admission[4] = opts.previewAdmission;
     return repos.deployment.create(...admission);
   };
   const dep = env.CLOUD_MODE
@@ -1515,7 +1547,7 @@ async function createQueuedDeploymentUnlocked(opts: {
   }
 
   try {
-    if (!opts.resourceChanges) await repos.deployment.createBuildSession({
+    if (!opts.resourceChanges && !opts.roleChanges && !opts.previewAdmission) await repos.deployment.createBuildSession({
       deploymentId: dep.id,
       projectId: opts.projectId,
       status: "queued",
@@ -2049,17 +2081,15 @@ export async function requestBuildAccess(
         );
     }
   }
-  const { useServicePipeline, servicePreflightServices } = await resolveServicePipelineMode(
+  // Classify against the resolved destination so an explicit Cloud/cluster
+  // choice cannot be mistaken for a self-hosted primary app.
+  Object.assign(snapshot, resolvedTarget);
+  const serviceMode = await resolveServicePipelineMode(
     project,
     snapshot,
   );
-  freezeResolvedServicePipeline(snapshot, { useServicePipeline, servicePreflightServices });
-
-  // Resolve the snapshot's target (deployTarget + serverId + runtimeMode) from
-  // the single source of truth shared with triggerDeployment — UI override >
-  // workspaceId > active-deployment meta. Keeps the two deploy entry points
-  // from diverging on where a project deploys.
-  Object.assign(snapshot, resolvedTarget);
+  const { useServicePipeline, servicePreflightServices } = serviceMode;
+  freezeResolvedServicePipeline(snapshot, serviceMode);
 
   // Keep the validated upload capability with the snapshot. Cloud transfers
   // only the session's source; a persisted path alone grants no filesystem access.
@@ -2134,7 +2164,7 @@ export async function requestBuildAccess(
       throw new ValidationError(error instanceof Error ? error.message : "Invalid resource limits");
     }
     await assertPlanAllowsResourceTier(ctx.organizationId, snapshot.resources,
-      snapshot.managedWorkspaceId ?? project.workspaceId ?? null);
+      snapshot.managedWorkspaceId ?? project.workspaceId ?? null, snapshot.serverId);
   }
 
   // ── Preflight: validate config + domain before creating any resources ──
@@ -2367,9 +2397,10 @@ export async function cancelBuildSession(
 export async function redeployBuildSession(
   ctx: RequestContext,
   deploymentId: string,
-  opts?: { useExistingCommit?: boolean; trigger?: string },
+  opts?: { useExistingCommit?: boolean; reuseBuild?: boolean; trigger?: string },
 ) {
   const { dep: oldDep, project } = await loadDeployment(deploymentId);
+  if (ctx.organizationId !== project.organizationId) throw new NotFoundError("Deployment", deploymentId);
   resolveDeploymentEnvironment(project, oldDep.environment);
   // The Openship control plane updates itself via the CLI — never a redeploy.
   // The apply-update endpoint (updates.service) reaches redeploy directly, and
@@ -2378,6 +2409,11 @@ export async function redeployBuildSession(
   // triggerDeployment. Otherwise "Apply update" no-ops on the adopt deployment
   // and fakes success while the running control plane is untouched.
   assertNotControlPlane(project);
+  if (opts?.reuseBuild) {
+    if (opts.useExistingCommit) throw new AppError("Choose either a deployment-only retry or a rebuild of the same commit.", 400);
+    const { retryBuiltDeployment } = await import("./retry-built-deployment");
+    return retryBuiltDeployment(ctx, oldDep, project);
+  }
   // GitHub access gate (default-deny): a member can redeploy a
   // GitHub-backed project only when granted this repo.
   await assertGitHubRepoAccess(ctx, {
@@ -2483,13 +2519,16 @@ export async function redeployBuildSession(
   // materialize compose rows as a side effect of redeploying it.
   await (await import("../projects/project-connection.service")).refreshConnectionEnv(ctx, project.id, oldDep.environment);
   let currentProjectEnv = await repos.project.getEnvMap(project.id, oldDep.environment, null);
+  // Configuration and code must come from the same selected revision. A branch
+  // may have moved or removed Compose since an exact-commit retry was requested.
+  const sourceRef = commitSha ?? branch;
   let currentSourceInfo: SourceEnvInfo | undefined;
   if (meta.serviceDeploymentMode !== "single") {
-    currentSourceInfo = await reconcileComposeSource(ctx, project, branch, {
+    currentSourceInfo = await reconcileComposeSource(ctx, project, sourceRef, {
       interpolationEnv: decryptEnvMap(currentProjectEnv),
     });
   }
-  currentSourceInfo ??= await resolveLifecycleSourceEnv(ctx, project, branch);
+  currentSourceInfo ??= await resolveLifecycleSourceEnv(ctx, project, sourceRef);
   const sourceEnv = mergeSourceEnvDefaults(currentProjectEnv, currentSourceInfo);
   currentProjectEnv = sourceEnv.encrypted ?? {};
   if (sourceEnv.additions.length > 0) {
@@ -2688,6 +2727,7 @@ export interface DeploymentTriggerInput {
   /** Internal Actions admission receipt; public deployment inputs cannot set it. */
   actionRequestId?: string;
   actionLeaseOwner?: string;
+  previewAdmission?: { id: string; token: string };
   actionEvent?: Record<string, unknown>;
 }
 
@@ -2697,6 +2737,13 @@ export async function triggerDeployment(ctx: RequestContext, data: DeploymentTri
   // have moved since application authorization resolved its organization.
   if (!project || project.organizationId !== ctx.organizationId) {
     throw new NotFoundError("Project", data.projectId);
+  }
+  if (data.previewAdmission && data.commitSha) {
+    const existing = await repos.pullRequestPreview.admittedDeployment(data.previewAdmission.id, data.previewAdmission.token, data.commitSha);
+    if (existing && existing.projectId === project.id) {
+      if (existing.status === "queued") await kickoffBuild(project, existing);
+      return { deployment: existing, skipped: true as const };
+    }
   }
   if (data.actionRequestId) {
     const existing = await repos.actions.deploymentForActionRequest(ctx.organizationId, data.actionRequestId);
@@ -2812,9 +2859,9 @@ export async function triggerDeployment(ctx: RequestContext, data: DeploymentTri
   }
 
   if (!data.reuseSnapshot && data.trigger !== "rollback") {
-    // Required checks approve the entire source tree at this commit, including
-    // Compose and lifecycle configuration. Do not re-read those files at HEAD.
-    const sourceRef = data.actionRequestId ? requestedCommitSha! : branch;
+    // A pinned commit selects configuration as well as code, including for
+    // manual deployments, required checks, and admitted previews.
+    const sourceRef = requestedCommitSha ?? branch;
     let sourceInfo: SourceEnvInfo | undefined = await reconcileComposeSource(ctx, project, sourceRef, {
       changedPaths: data.changedPaths,
       interpolationEnv: decryptEnvMap(encryptedEnvVars ?? {}),
@@ -2825,6 +2872,10 @@ export async function triggerDeployment(ctx: RequestContext, data: DeploymentTri
     if (sourceEnv.additions.length > 0) {
       await repos.project.mergeEnvVars(project.id, environment, sourceEnv.additions, []);
     }
+  }
+
+  if (data.previewAdmission) {
+    await (await import("../projects/pull-request-previews")).preparePreviewDeployment(ctx, project, data.previewAdmission);
   }
 
   // Scoped internal callers (incoming deploy hooks) require an exact target
@@ -2898,11 +2949,12 @@ export async function triggerDeployment(ctx: RequestContext, data: DeploymentTri
     );
   }
 
-  const { useServicePipeline, servicePreflightServices } = await resolveServicePipelineMode(
+  const serviceMode = await resolveServicePipelineMode(
     project,
     snapshot,
   );
-  freezeResolvedServicePipeline(snapshot, { useServicePipeline, servicePreflightServices });
+  const { useServicePipeline, servicePreflightServices } = serviceMode;
+  freezeResolvedServicePipeline(snapshot, serviceMode);
 
   // Resolve once, before preflight: a single-app refresh is a pinned-artifact
   // deploy, so preflight and git-token resolution must both see that it needs no
@@ -3055,6 +3107,21 @@ export async function triggerDeployment(ctx: RequestContext, data: DeploymentTri
     refreshServiceIds = target.length > 0 ? target : undefined;
   }
 
+  // Changed-file routing may name the inherited app's service row. That is a
+  // normal application release, not a general Compose service action: retain
+  // the release/role engine and let it carry unchanged infrastructure. Exact
+  // hooks and explicit manual service selections retain their requested scope.
+  if (
+    !data.refresh && !reuse && serviceMode.primaryApp &&
+    finalServiceIds?.includes(serviceMode.primaryApp.app.id) &&
+    ((data.smartRoute && !data.serviceIds?.length) ||
+      (data.trigger === "webhook" && !data.strictServiceScope))
+  ) {
+    finalForceAll = true;
+    finalServiceIds = undefined;
+    refreshServiceIds = undefined;
+  }
+
   const dep = await createQueuedDeployment({
     analyticsActor: { userId: ctx.userId, source: ctx.source },
     projectId: project.id,
@@ -3065,6 +3132,7 @@ export async function triggerDeployment(ctx: RequestContext, data: DeploymentTri
     trigger: data.trigger ?? "manual",
     actionRequestId: data.actionRequestId,
     actionLeaseOwner: data.actionLeaseOwner,
+    previewAdmission: data.previewAdmission,
     environment,
     framework: snapshot.framework,
     meta: await metaWithPrevious(snapshot, project),

@@ -23,11 +23,29 @@ dim and dark lift the inner surface. Form dropdowns use a lighter surface than t
 the trigger override above is intentional because `filled` alone uses the input background.
 
 Keep visible keyboard focus, error indicators, meaningful selection outlines, and useful dividers.
-Runtime version selection belongs in the existing deploy wizard's build settings, using the shared
-filled dropdown. Derive the default and supported versions from the selected stack's runtime policy, and report incompatible custom
-builders inline. Docker builds offer an optional runtime base image in Advanced settings, with
-its managed default as the placeholder. Keep overrides explicit, validate compatibility, and
-show failures inline; blank resets the override. Bare and service-owned recipes do not offer it. The saved project Configuration card shows the selected version beside its build settings.
+Runtime version, build image, and runtime image selection belong in a visible **Runtime** section of the
+existing deploy wizard. Use the shared filled dropdown and inputs. Derive supported versions and
+managed image defaults from the stack's runtime policy; show incompatible custom overrides inline.
+Blank resets an image override. Unsupported destinations explain which source or server owns the
+runtime, and saved overrides remain visible so users can clear them. Static Docker builds show
+only the build image. Do not repeat these fields under Advanced. The saved project Configuration
+card shows the selected runtime version.
+Build-location choices and summaries describe execution, independently of source cloning.
+Keep local building in the destination's advanced controls only when the runtime supports it.
+Remote Docker, static sandbox, service, managed Cloud and cluster builds name their build
+destination; a stale local-build preference must not advertise work on Desktop. Preserve the
+separate clone-location choice and existing source behavior when hiding unavailable builds.
+Image updates belong in the existing project and service Redeploy dropdown. Reuse the same
+**Refresh images & redeploy** and **Check image updates** actions for every stack, including
+prebuilt image services. Refresh preserves configured versions and digest pins. Image drift uses
+the existing compact recommendation notice and direct redeploy action; unknown baselines are never
+reported current. Record image identities in deployment metadata without executing interpreter
+probes. Cache clearing only clears cache; it never schedules a future runtime update. Restart and
+environment refresh do not imply an image update or automatic security coverage.
+The failed deployment page offers **Retry deployment** only when the server reports a retained
+completed image. It replays that attempt's saved configuration with no build or replacement image
+pull. Keep ordinary **Redeploy** available for a new build. Routing-only warnings use the existing
+Domains retry action; do not turn those into image rebuilds.
 Borderless cards do not remove those functional indicators. Menus should use the shared dropdown
 component's existing positioning, keyboard behavior, and menu surface.
 
@@ -231,7 +249,9 @@ use their installed tools and physical CPU.
 ## Layout and density
 
 Project navigation groups metrics, runtime/request logs and available Health views
-under **Monitoring & Logs**. Reuse the shared project section tabs above the content
+under **Monitoring & Logs**. Runtime-health attention on project cards opens the existing
+Health view and clears from the same incident state when a workload recovers;
+a successful deployment remains a successful deployment. Reuse the shared project section tabs above the content
 on desktop and mobile. Keep existing section URLs so saved links and log shortcuts
 open the same view, and show Health only where the project already supports it.
 
@@ -398,6 +418,8 @@ check retryable before starting the move.
 - The Cloud sidebar orders its sections as Main, Settings, then Infrastructure.
   Self-hosted instances keep Infrastructure before Settings, including when connected to Cloud.
   Backups belongs under Infrastructure beside Servers/Resources, Emails and Jobs, in every platform mode.
+  Missing-edge warnings use the API's routing requirement, independently of the total project count.
+  Private workloads and workers keep the optional install action without an outage/attention indicator.
   Cloud and Cloud-connected installations add Support as the final entry, under Help.
   Keep it reachable for existing Cloud projects if the connection needs attention, using
   the sidebar's loaded project inventory. The private support center uses a
@@ -611,6 +633,10 @@ Cloud spaces uses the read-only provider metrics stream through Openship's authe
 endpoint. Title the card Resource usage, and show Live only after a valid sample; pause hidden pages and cancel subscriptions when
 the space, account or tab changes. Retain and label the last reading on disconnect with Retry.
 Recent charts contain at most 60 samples from the open page, not billed usage or historical analytics.
+Provider usage frames can omit individual metrics. Resolve CPU, memory and storage independently
+by measurement time from recent live readings and the host snapshot; a partial frame must not
+erase measured storage. Keep each memory/storage group together, show the measurement time when a row uses an
+older sample, and leave unknown values and chart gaps unknown rather than substituting capacity or zero.
 Project storage inventory uses the existing snapshot request and is not scanned on every live tick.
 Cloud spaces and Billing reuse the shared destination picker rows, project counts and catalog plan names.
 Keep instant resource readings and project storage on Cloud spaces. Billing retains subscription,
@@ -648,6 +674,11 @@ is an explicit refresh, not an automatic SSH request when the page opens. Show
 proxy overrides only for targets that apply them, preserving stored values when
 editing other routing rules.
 
+Project and service route saves share the same inline preparation and HTTPS progress viewer.
+The first exposed route retains proxy takeover consent and completes domain checks after edge
+setup. New custom hostnames on an existing edge use the existing project routing/HTTPS check;
+DNS-01 setup stays explicit. Reordering/removing routes does not request another certificate.
+Refresh canonical route and certificate state after any preparation outcome.
 Routing retries keep their logs inline and reconnect to the same server operation after a
 refresh. Refresh domain status and the routing warning from the canonical project response;
 do not clear one optimistically. A domain card has one primary repair action, including when
@@ -784,3 +815,50 @@ only to new custom domains and must be explicit in the deployment and Add domain
 Existing hostnames keep their Access choice when server defaults change. Close or reset
 private dialogs on account/organization switches, discard late results, and guard
 backdrop, Escape and close buttons while a write is in flight.
+
+The project Apps & Services view keeps runtime-role configuration and live role replicas
+available when the primary app is represented by a service row. The existing role editor
+reads support from the API; do not add a duplicate primary application card. Service-only
+changes retain the web process and roles, while the toolbar wraps on narrow screens.
+
+Webhook delivery rows show a short, localized explanation below the repository when change analysis records a decision. Reuse the existing feed; keep unknown reason codes out of user-facing text.
+
+## Topology scaling
+
+Node Overview offers a compact Scale action that opens the existing inspector.
+Application replica changes show the observed and requested counts in a review
+before calling the existing configuration release API. Preserve stale-release
+preconditions and action locks. Unsupported Kubernetes Compose workloads, storage,
+and Cloud destinations show their capability reason; do not advertise application
+copies as synchronized replicas. An existing compute cluster can open the shared
+runtime setup inline, preserving the workload draft. Embedded setup omits runtime
+removal and unrelated navigation; continuation rechecks readiness and does not
+deploy an application.
+
+Managed database nodes have Overview, Scale, and Details views.
+Replicated database data members are expanded in the project overview by default,
+with primary/replica roles, readiness, servers, and replication arrows. Keep a
+compact toggle for large graphs. A transparent logical database header retains
+settings and writer/reader bindings; individual pods remain inspection-only.
+Never invent members from the requested count or a primary from pod ordinals.
+Sentinel voters are counted separately and remain inspectable in Instances.
+Single-instance databases stay as one card. Scale shows the primary/replica or shard
+layout, observed readiness and timestamp, and reviews changes against the saved
+sequence. PostgreSQL presents a read-replica count;
+Redis replication and sharding remain distinct. Connection fields allow explicit
+writer and reader bindings, explain application-side selection, and keep secrets
+masked. Use semantic surfaces and existing controls, with progress from saved
+operations. Account, workspace and instance changes reset private drafts/reviews.
+
+Fine-grained token capability hints describe the enforced operation scope. Deployment trigger access does not promise cancellation, rollback, or deletion; those keep their project admin requirement.
+
+Monorepo imports start with an explicit **Choose apps** step. Detection supplies candidates;
+CLI tools, mobile apps and packages are never enabled just because they have a port.
+Show selected app cards only, with **Change selection** followed by **Add more** on the
+right of the section header. **Add more** opens the repository folder picker. Folder
+selection reuses repository browsing and detection, while
+commands, environment and framework edits reuse the existing app form. Rescans retain
+user choices and manually added folders. Keep each route on its owning app. The sidebar
+shows at most three domain rows, a total count and **View all**; the shared domain editor
+uses an app selector and a public-access toggle. Changing wizard settings takes effect
+when saved or deployed, according to the existing wizard action.

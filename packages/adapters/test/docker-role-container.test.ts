@@ -51,7 +51,10 @@ async function fakeDaemon(opts: { startError?: Error; removeError?: Error } = {}
     creates.push(args);
     return { id: "c".repeat(64), start, remove };
   });
-  (runtime as unknown as { _docker: unknown })._docker = { createContainer };
+  (runtime as unknown as { _docker: unknown })._docker = {
+    createContainer,
+    getImage: () => ({ inspect: async () => ({ Config: {} }) }),
+  };
   const logs: LogEntry[] = [];
   const onLog = (entry: LogEntry) => {
     logs.push(entry);
@@ -102,6 +105,16 @@ describe("DockerRuntime.deployRole: container shape", () => {
         message: droppedRuntimeEnvMessage(["PATH"]),
       }),
     );
+  });
+
+  it("drops a project-set PORT and unsets any PORT the image inherits", async () => {
+    const { runtime, creates } = await fakeDaemon();
+    await runtime.deployRole(baseConfig({ envVars: { PORT: "8080", APP_NAME: "demo" } }), ROLE, 1);
+
+    const env: string[] = creates[0]!.Env;
+    expect(env.filter((e) => e === "PORT" || e.startsWith("PORT="))).toEqual(["PORT"]);
+    expect(env).toContain("APP_NAME=demo");
+    expect(env).toContain("NODE_ENV=production");
   });
 
   it("labels project, deployment and role, never service or build", async () => {

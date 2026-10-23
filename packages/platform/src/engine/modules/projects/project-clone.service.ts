@@ -58,6 +58,9 @@ const PROJECT_FIELDS_NOT_CLONED = [
   "serverId",
   // Deployment state belongs to deploys that happened, and none have.
   "activeDeploymentId",
+  "buildCacheReceipts",
+  "previewSettings",
+  "previewScannedAt",
   // A copy has never participated in the source project's Cloud transfer.
   "cloudPromotion",
   // Lifecycle flags: a copy of a paused or half-deleted project starts clean and running.
@@ -166,7 +169,7 @@ export async function cloneProjectToServer(input: {
   const sourceEnv = await repos.project.listEnvVars(source.id);
 
   const { project: created } = await withProjectCreationLock(input.organizationId, async () => {
-    await assertProjectQuota(input.organizationId, target.workspaceId);
+    await assertProjectQuota(input.organizationId, target.workspaceId, target.id);
     const slug = await uniqueProjectSlug(input.organizationId, slugify(desiredName));
     return repos.project.createProjectWithRecords({
       group: {

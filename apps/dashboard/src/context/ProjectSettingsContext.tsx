@@ -72,6 +72,7 @@ interface ProjectOptions {
 }
 
 interface BasicProjectData {
+  environmentType?: "production" | "preview" | "development";
   id: string;
   slug: string;
   name: string;
@@ -1056,7 +1057,7 @@ const ProjectSettingsState: React.FC<ProviderProps> = ({
 
   const tabs = useMemo<ProjectTab[]>(() => {
     const tl = t.projects.sidebar.tabs;
-    const healthAvailable = selfHosted && projectData.deployTarget !== "cloud";
+    const healthAvailable = projectData.deployTarget !== "cloud" && (selfHosted || !!projectData.serverId);
     return [
       { id: "overview", label: tl.overview, icon: "chart-pie" },
       { id: "topology", label: tl.topology, icon: "topology" },

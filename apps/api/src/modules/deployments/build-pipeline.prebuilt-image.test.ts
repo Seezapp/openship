@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   updateDeploymentStatus: vi.fn(),
   updateBuildSession: vi.fn(),
   findDeploymentById: vi.fn(),
+  findProjectById: vi.fn(),
   prepareImage: vi.fn(),
   runReleaseCommand: vi.fn(),
   build: vi.fn(),
@@ -60,9 +61,13 @@ vi.mock("@repo/db", () => ({
   runOutsideAdvisoryLock: <T>(work: () => T) => work(),
   schema: {},
   repos: {
+    pullRequestPreview: { findByProject: vi.fn(async () => undefined) },
+  routeProtection: { readPrivate: vi.fn(async () => null) },
     cloudBuildActivity: { cancelReservation: mocks.cancelReservation },
     cloudDockerWorkspace: { find: (...args: unknown[]) => mocks.findCloudDockerBinding(...args) },
     deployment: {
+      listPendingRoleHandovers: async () => [],
+      setRoleHandover: async () => {},
       findBuildSessionByDeploymentId: (...args: unknown[]) =>
         mocks.findBuildSessionByDeploymentId(...args),
       claimBuildExecution: (...args: unknown[]) => mocks.claimBuildExecution(...args),
@@ -85,7 +90,7 @@ vi.mock("@repo/db", () => ({
       listByProject: vi.fn(async () => []),
       remove: vi.fn(async () => undefined),
     },
-    project: { update: vi.fn(async () => undefined) },
+    project: { findById: mocks.findProjectById, update: vi.fn(async () => undefined) },
   },
 }));
 
@@ -133,7 +138,12 @@ vi.mock("@repo/adapters", () => {
     BuildLogger,
     LocalExecutor: class LocalExecutor {},
     BareRuntime: class BareRuntime {},
-    DockerRuntime: class DockerRuntime {},
+    DockerRuntime: class DockerRuntime {
+      // This suite observes artifact/retirement behavior, not Docker identities.
+      static deploymentContainerName() {
+        return "mock-container";
+      }
+    },
     CloudRuntime: class CloudRuntime {},
     CloudDockerRuntime: class CloudDockerRuntime {},
     STATIC_RELEASE_BASE: "/opt/openship/static/releases",
@@ -231,6 +241,8 @@ vi.mock("@repo/platform/engine/modules/backups/triggers/pre-deploy", () => ({
 }));
 
 vi.mock("@repo/platform/engine/modules/deployments/deployment-lifecycle", () => ({
+  beginBuildTiming: vi.fn(),
+  completeBuildTiming: vi.fn(),
   onFailure: (...args: unknown[]) => mocks.onFailure(...args),
   onSuccess: (...args: unknown[]) => mocks.onSuccess(...args),
   onCancelled: (...args: unknown[]) => mocks.onCancelled(...args),
@@ -331,6 +343,8 @@ function allocatePinnedHostPort(input: {
 import { repos, type Deployment } from "@repo/db";
 import { ensurePortAvailable, isMultiServiceRuntime } from "@repo/adapters";
 import { firePreDeployBackups } from "@repo/platform/engine/modules/backups/triggers/pre-deploy";
+import { ensureEdgeChallengeReady } from "@repo/platform/engine/lib/edge-challenge";
+import { repairEdgeVhosts } from "@repo/platform/engine/lib/edge-vhost-repair";
 import { executeComposePipeline, resolveProjectServicePreflightServices, shouldUseProjectServicePipeline } from "@repo/platform/engine/modules/deployments/compose/index";
 import { CloudBuildAdmissionDeferredError, releaseCloudBuildSlot, runOutsideCloudBuildActivity } from "@repo/platform/engine/lib/cloud-build-activity";
 import { AppError } from "@repo/core";
@@ -341,6 +355,11 @@ import { env } from "@repo/platform/engine/config/index";
 import { platform } from "@repo/platform/engine/lib/platform-config";
 import { resolveDeploymentPlatform, resolveDeploymentRuntime } from "@repo/platform/engine/lib/deployment-runtime";
 import { runDeployPipeline as runRealDeployPipeline } from "../../../../../packages/adapters/src/runtime/deploy-pipeline";
+import {
+  buildProjectRouteDomains,
+  ensureRouteDomainRecord,
+  toRoutedDomainInputs,
+} from "@repo/platform/engine/lib/routing-domains";
 import {
   kickoffBuild,
   resolveServicePipelineMode,
@@ -361,8 +380,11 @@ function runtime() {
   return {
     name: "docker",
     capabilities: new Set(["prebuiltImage", "deploy", "containerIp", "releaseCommand"]),
-    supports: (capability: string): boolean =>
-      capability === "prebuiltImage" || capability === "deploy" || capability === "containerIp" || capability === "releaseCommand",
+    supports(capability: string): boolean {
+      return capability === "prebuiltImage" || capability === "deploy" || capability === "containerIp" || capability === "releaseCommand" ||
+        (capability === "dockerHost" && this.name === "docker") ||
+        (capability === "clusterStatus" && ["kubernetes", "swarm"].includes(this.name));
+    },
     prepareImage: (...args: unknown[]) => mocks.prepareImage(...args),
     runReleaseCommand: (...args: unknown[]) => mocks.runReleaseCommand(...args),
     build: (...args: unknown[]) => mocks.build(...args),
@@ -442,7 +464,9 @@ function deployment(overrides: Record<string, unknown> = {}): Deployment {
 
 async function run(dep = deployment(), projectOverrides: Record<string, unknown> = {}) {
   mocks.findDeploymentById.mockResolvedValue(dep);
-  const sessionId = await kickoffBuild(project(projectOverrides), dep);
+  const currentProject = project(projectOverrides);
+  mocks.findProjectById.mockResolvedValue(currentProject);
+  const sessionId = await kickoffBuild(currentProject, dep);
   expect(sessionId).toBe("build-session-1");
   return dep;
 }
@@ -552,6 +576,49 @@ describe("single-app prebuilt release-image pipeline", () => {
       usesManagedRouting: true,
     } as never;
     vi.mocked(resolveDeploymentPlatform).mockResolvedValue(resolvedPlatform);
+  });
+
+  it.each([false, true])("routes a hostname verified during the first build and surfaces edge failures (write fails: %s, #1281)", async (writeFails) => {
+    const actual = await vi.importActual<typeof import("@repo/platform/engine/lib/routing-domains")>(
+      "@repo/platform/engine/lib/routing-domains",
+    );
+    const domain = {
+      id: "custom-domain", projectId: "project-1", hostname: "app.example.com",
+      domainType: "custom", serviceId: null, targetPort: null, targetPath: null,
+      verified: false, sslStatus: "none",
+    };
+    mocks.prepareImage.mockImplementationOnce(async () => {
+      // Verification finishes while the image is being prepared, before routing
+      // reads the fresh domain rows. No active deployment exists to reapply yet.
+      domain.verified = true;
+      domain.sslStatus = "active";
+      return { status: "deploying", imageRef: RESOLVED_IMAGE, durationMs: 12 };
+    });
+    vi.mocked(repos.domain.listByProject).mockResolvedValueOnce([domain] as never);
+    vi.mocked(buildProjectRouteDomains).mockImplementationOnce(actual.buildProjectRouteDomains);
+    vi.mocked(toRoutedDomainInputs).mockImplementationOnce(actual.toRoutedDomainInputs);
+    vi.mocked(ensureRouteDomainRecord).mockResolvedValueOnce({ domain, created: false } as never);
+    const registerRoute = vi.fn().mockResolvedValue(undefined);
+    if (writeFails) registerRoute.mockRejectedValue(new Error("Edge reload failed"));
+    vi.mocked(resolveDeploymentPlatform).mockResolvedValue({
+      ...resolvedPlatform,
+      platform: { ...resolvedPlatform.platform, routing: { registerRoute } as never },
+    });
+    mocks.runDeployPipeline.mockImplementationOnce(runRealDeployPipeline);
+
+    await run();
+    await drainDeploymentExecutions();
+
+    expect(registerRoute).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      domain: "app.example.com", targetUrl: "http://172.18.0.2:8080", tls: true,
+    }));
+    expect(mocks.onSuccess).toHaveBeenCalledOnce();
+    const meta = mocks.onSuccess.mock.calls[0]![1].metaPatch ?? {};
+    if (writeFails) {
+      expect(meta).toMatchObject({ edgeUnsynced: true, deployWarning: "routing warning" });
+    } else {
+      expect(meta).not.toHaveProperty("edgeUnsynced");
+    }
   });
 
   it.each([null, "workspace-1"])(
@@ -702,9 +769,11 @@ describe("single-app prebuilt release-image pipeline", () => {
     }
   });
 
-  it.each(["docker", "kubernetes"])("%s pulls the frozen image, skips source builds, and freezes the digest", async (runtimeName) => {
+  it.each(["docker", "kubernetes", "swarm"].flatMap(runtimeName =>
+    ["update", "manual", "redeploy"].map(trigger => ({ runtimeName, trigger })),
+  ))("$runtimeName $trigger refreshes the registry image, skips source builds, and freezes the digest", async ({ runtimeName, trigger }) => {
     resolvedRuntime.name = runtimeName;
-    await run();
+    await run(deployment({ trigger }));
     await vi.waitFor(() => expect(mocks.onSuccess).toHaveBeenCalledTimes(1));
     await vi.waitFor(() =>
       expect(mocks.acknowledgeBuildExecutionFinished).toHaveBeenCalledWith("build-session-1"),
@@ -717,7 +786,8 @@ describe("single-app prebuilt release-image pipeline", () => {
         slug: "release-app",
         imageRef: SOURCE_IMAGE,
         envVars: { API_TOKEN: "secret", PORT: "8080" },
-        forcePull: true,
+        forcePull: trigger === "update",
+        refreshMutableTag: trigger !== "update",
       }),
       expect.anything(),
     );
@@ -1105,10 +1175,53 @@ describe("single-app prebuilt release-image pipeline", () => {
     await vi.waitFor(() => expect(mocks.reportPipelineError).toHaveBeenCalledOnce());
     await waitForDeploymentQuiescence("deployment-1", "project-1");
     expect(mocks.reportPipelineError).toHaveBeenCalledWith(
-      expect.anything(), expect.stringContaining("not supported on multi-service deployments"), expect.anything(), undefined,
+      expect.anything(),
+      "Project release commands are not supported on multi-service deployments. " +
+        "Deployment stopped before activation. " +
+        "To keep the release commands, deploy the app as a new single-app Docker project. " +
+        "Connect separately deployed services through Apps & Services → Add → Connect existing. " +
+        "Connecting services does not convert this project back to single-app. " +
+        "Otherwise remove the release commands.",
+      expect.anything(), undefined,
     );
     expect(repos.service.syncFromCompose).not.toHaveBeenCalled();
+    expect(executeComposePipeline).not.toHaveBeenCalled();
     expect(mocks.runReleaseCommand).not.toHaveBeenCalled();
+    expect(mocks.deploy).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a rollback", { trigger: "rollback" }, {}],
+    ["a service-only action", { trigger: "redeploy" }, { targetServiceIds: ["svc-db"] }],
+  ])("deploys %s of a multi-service project without refusing its release commands", async (_label, dep, meta) => {
+    vi.mocked(shouldUseProjectServicePipeline).mockResolvedValue(true);
+    vi.mocked(isMultiServiceRuntime).mockReturnValue(true);
+    await run(deployment({ ...dep, meta: {
+      ...snapshot(), serviceDeploymentMode: "services", releaseCommands: ["migrate"], ...meta,
+      composeServices: [{ name: "db", image: "postgres:16", ports: [], dependsOn: [], environment: {}, volumes: [] }],
+    } }));
+    await drainDeploymentExecutions();
+    expect(executeComposePipeline).toHaveBeenCalledOnce();
+    expect(mocks.reportPipelineError).not.toHaveBeenCalled();
+    expect(mocks.runReleaseCommand).not.toHaveBeenCalled();
+  });
+
+  it("refuses runtime roles on a multi-service deployment before the build starts", async () => {
+    vi.mocked(shouldUseProjectServicePipeline).mockResolvedValue(true);
+    vi.mocked(isMultiServiceRuntime).mockReturnValue(true);
+    await run(deployment({ meta: {
+      ...snapshot(), serviceDeploymentMode: "services",
+      roles: [{ name: "queue", kind: "worker", command: "php artisan queue:work" }],
+      composeServices: [{ name: "redis", image: "redis:7", ports: [], dependsOn: [], environment: {}, volumes: [] }],
+    } }));
+    await vi.waitFor(() => expect(mocks.reportPipelineError).toHaveBeenCalledOnce());
+    await waitForDeploymentQuiescence("deployment-1", "project-1");
+    expect(mocks.reportPipelineError).toHaveBeenCalledWith(
+      expect.anything(), expect.stringMatching(/^Runtime roles are not supported on multi-service deployments yet\. /), expect.anything(), undefined,
+    );
+    expect(mocks.setDeploymentStatus).not.toHaveBeenCalledWith("deployment-1", "building");
+    expect(executeComposePipeline).not.toHaveBeenCalled();
+    expect(mocks.build).not.toHaveBeenCalled();
     expect(mocks.deploy).not.toHaveBeenCalled();
   });
 
@@ -1356,7 +1469,12 @@ describe("single-app prebuilt release-image pipeline", () => {
     }
   });
 
-  it("inventories migrated edge routes before reserving a loopback host port", async () => {
+  it.each([false, true])("inventories loopback claims with routed=%s, preparing edge only for routes", async (routed) => {
+    vi.mocked(buildProjectRouteDomains).mockReturnValueOnce(routed ? [{
+      hostname: "app.example.com", tls: false, provisionSsl: false,
+      requiresSslTooling: false, terminatesTlsLocally: false, isCloud: false,
+      targetPort: 8080,
+    }] : []);
     mocks.runDeployPipeline.mockImplementationOnce(async (env, input) => {
       await env.preflight(input.config, async () => "migrate");
       const result = await env.activate(input.config, () => undefined);
@@ -1370,12 +1488,16 @@ describe("single-app prebuilt release-image pipeline", () => {
     await run(deployment(), { routeStrategy: "loopback-port" });
     await vi.waitFor(() => expect(mocks.onSuccess).toHaveBeenCalledTimes(1));
 
-    expect(mocks.ensureRoutingReady).toHaveBeenCalledTimes(1);
+    expect(mocks.ensureRoutingReady).toHaveBeenCalledTimes(routed ? 1 : 0);
+    expect(ensureEdgeChallengeReady).toHaveBeenCalledTimes(routed ? 1 : 0);
+    expect(repairEdgeVhosts).toHaveBeenCalledTimes(routed ? 1 : 0);
     expect(mocks.prepareTargetPinnedHostPorts).toHaveBeenCalledTimes(1);
     expect(mocks.allocateAndReservePinnedHostPort).toHaveBeenCalledTimes(1);
-    expect(mocks.ensureRoutingReady.mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.prepareTargetPinnedHostPorts.mock.invocationCallOrder[0]!,
-    );
+    if (routed) {
+      expect(mocks.ensureRoutingReady.mock.invocationCallOrder[0]).toBeLessThan(
+        mocks.prepareTargetPinnedHostPorts.mock.invocationCallOrder[0]!,
+      );
+    }
     expect(mocks.prepareTargetPinnedHostPorts.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.allocateAndReservePinnedHostPort.mock.invocationCallOrder[0]!,
     );

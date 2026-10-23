@@ -37,6 +37,94 @@ describe("resolveProjectInfo", () => {
     return path;
   }
 
+  it("inspects an explicitly selected root or unlisted folder without promoting another app", async () => {
+    const path = await mkdtemp(join(tmpdir(), "openship-selected-root-"));
+    tempDirs.push(path);
+    await mkdir(join(path, "apps/web"), { recursive: true });
+    await mkdir(join(path, "packages/job"), { recursive: true });
+    await writeFile(
+      join(path, "package.json"),
+      JSON.stringify({
+        name: "root",
+        scripts: { start: "node root.js" },
+        workspaces: ["apps/*", "packages/*"],
+      }),
+    );
+    await writeFile(
+      join(path, "apps/web/package.json"),
+      JSON.stringify({ scripts: { build: "vite build" }, devDependencies: { vite: "^6" } }),
+    );
+    await writeFile(
+      join(path, "packages/job/package.json"),
+      JSON.stringify({ scripts: { start: "node job.js" } }),
+    );
+    const root = await resolveProjectInfo({ source: "local", path, rootDirectory: "." });
+    expect(root.rootDirectory).toBe("./");
+    expect(root.startCommand).toContain("start");
+    expect(root.monorepoApps).toBeUndefined();
+    const manual = await resolveProjectInfo({
+      source: "local",
+      path,
+      rootDirectory: "packages/job",
+    });
+    expect(manual.rootDirectory).toBe("packages/job");
+    expect(manual.startCommand).toContain("start");
+    await expect(
+      resolveProjectInfo({ source: "local", path, rootDirectory: "missing" }),
+    ).rejects.toThrow(/selected app folder/);
+  });
+
+  it.each([true, false])("retains service swapDisabled=%s through source detection", async swapDisabled => {
+    const path = await mkdtemp(join(tmpdir(), "openship-swap-source-"));
+    tempDirs.push(path);
+    await writeFile(join(path, "openship.json"), JSON.stringify({
+      services: [{ name: "vault", image: "example/vault:1", resources: {
+        ...(swapDisabled ? { memoryMb: 1024 } : {}), swapDisabled,
+      } }],
+    }));
+    const detected = await resolveProjectInfo({ source: "local", path });
+    expect(detected.services?.[0]?.advanced?.resources?.swapDisabled).toBe(swapDisabled);
+  });
+
+  it("suggests framework roles without enabling them and respects an explicit opt-out", async () => {
+    const path = await mkdtemp(join(tmpdir(), "openship-role-suggestions-"));
+    tempDirs.push(path);
+    await writeFile(
+      join(path, "composer.json"),
+      JSON.stringify({
+        require: { "laravel/framework": "^12", "laravel/horizon": "^5" },
+      }),
+    );
+    await writeFile(join(path, "artisan"), "<?php\n");
+    const detected = await resolveProjectInfo({ source: "local", path });
+    expect(detected.rolePresets?.map((role) => role.name)).toEqual(["horizon", "scheduler"]);
+    expect(detected.roles).toBeUndefined();
+    expect(detected.rolePresets?.every((role) => !role.slot && !role.when && !role.unless)).toBe(
+      true,
+    );
+
+    await writeFile(join(path, "openship.json"), JSON.stringify({ roles: [] }));
+    const optedOut = await resolveProjectInfo({ source: "local", path });
+    expect(optedOut.roles).toEqual([]);
+    expect(optedOut.rolePresets).toBeUndefined();
+  });
+
+  it("checks a preset's nested files in the selected application root", async () => {
+    const path = await mkdtemp(join(tmpdir(), "openship-rails-role-suggestions-"));
+    tempDirs.push(path);
+    const root = join(path, "backend");
+    await mkdir(join(root, "bin"), { recursive: true });
+    await writeFile(join(root, "Gemfile"), "gem 'rails'\ngem 'solid_queue'\n");
+    await writeFile(join(root, "bin", "jobs"), "#!/usr/bin/env ruby\n");
+    await writeFile(join(root, "bin", "rails"), "#!/usr/bin/env ruby\n");
+    const detected = await resolveProjectInfo({ source: "local", path, rootDirectory: "backend" });
+    expect(detected.rolePresets?.map((role) => role.name)).toEqual(["jobs"]);
+    expect(detected.roles).toBeUndefined();
+    await writeFile(join(root, "Gemfile"), "gem 'rails'\ngem 'solid_queue'\ngem 'sidekiq'\n");
+    const ambiguous = await resolveProjectInfo({ source: "local", path, rootDirectory: "backend" });
+    expect(ambiguous.rolePresets).toBeUndefined();
+  });
+
   it("reads the listed Dockerfile path on case-sensitive sources", async () => {
     const reads: string[] = [];
     const info = await resolveFromReader(
@@ -212,12 +300,28 @@ describe("resolveProjectInfo", () => {
     await writeFile(join(tempDir, "Dockerfile"), "FROM node:22-alpine\n");
     await writeFile(
       join(tempDir, "compose.yaml"),
-      ["services:", "  app:", "    build: .", "  caddy:", "    image: caddy:2"].join("\n"),
+      [
+        "services:",
+        "  app:",
+        "    build: .",
+        "  caddy:",
+        "    image: caddy:2",
+        "  postgres:",
+        "    image: postgres:16-alpine",
+        "    volumes:",
+        "      - database:/var/lib/postgresql/data",
+        "volumes:",
+        "  database:",
+      ].join("\n"),
     );
 
     const scan = await resolveProjectInfo({ source: "local", path: tempDir });
-    expect(scan.stack).toBe("docker");
-    expect(scan.services).toBeUndefined();
+    expect(scan).toMatchObject({ stack: "docker-compose", projectType: "services" });
+    expect(scan.services?.map((service) => service.name)).toEqual(["app", "caddy", "postgres"]);
+    expect(scan.services?.find((service) => service.name === "postgres")).toMatchObject({
+      image: "postgres:16-alpine",
+      volumes: ["database:/var/lib/postgresql/data"],
+    });
 
     const compose = await resolveProjectInfo({
       source: "local",
@@ -225,7 +329,7 @@ describe("resolveProjectInfo", () => {
       expectCompose: true,
     });
     expect(compose.projectType).toBe("services");
-    expect(compose.services?.map((service) => service.name)).toEqual(["app", "caddy"]);
+    expect(compose.services).toEqual(scan.services);
   });
 
   it.each([

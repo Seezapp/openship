@@ -2,6 +2,10 @@ import { describe, it, expect, vi } from "vitest";
 import type { StackRole } from "@repo/core";
 import type { BuildLogger, DeployConfig, RuntimeAdapter } from "@repo/adapters";
 import {
+  rolloutRoles,
+  type RoleContainerRef,
+} from "@repo/platform/engine/modules/deployments/role-rollout";
+import {
   rolesUnsupportedReason,
   roleTeardownTimeoutMs,
   retirePreviousRoleContainers,
@@ -55,10 +59,34 @@ describe("rolesUnsupportedReason", () => {
     }
   });
 
-  it("refuses a multi-service deploy", () => {
+  it("refuses a multi-service deploy and points to a new single-app project", () => {
     expect(rolesUnsupportedReason(input({ multiService: true }))).toBe(
-      'Runtime roles are not supported on multi-service deployments yet. Remove "roles" from openship.json, or deploy the app as a single service.',
+      "Runtime roles are not supported on multi-service deployments yet. " +
+        "To keep the roles, deploy the app as a new single-app Docker project. " +
+        "Connect separately deployed services through Apps & Services → Add → Connect existing. " +
+        "Connecting services does not convert this project back to single-app. " +
+        'To remove the roles, set "roles" to [] through the project API, SDK or CLI. ' +
+        'Also remove "roles" from openship.json if the repository declares them.',
     );
+  });
+
+  // A deploy sees only the project's saved roles. openship.json seeds them at
+  // import, Configure roles and the project API save them, and nothing records
+  // which one did. So one message must hold for every source: openship.json is
+  // conditional, the API path clears roles whoever saved them, and Configure
+  // roles is not offered because it is unavailable on these deployments.
+  it("uses source-neutral wording in both refusals", () => {
+    for (const reason of [
+      rolesUnsupportedReason(input({ multiService: true })),
+      rolesUnsupportedReason(input({ runtime: bareLike })),
+    ]) {
+      expect(reason).toContain('set "roles" to [] through the project API, SDK or CLI.');
+      expect(reason).toContain(
+        'Also remove "roles" from openship.json if the repository declares them.',
+      );
+      expect(reason).not.toMatch(/Remove "roles" from openship\.json/);
+      expect(reason).not.toMatch(/Configure roles/);
+    }
   });
 
   it("refuses a static site", () => {
@@ -70,7 +98,9 @@ describe("rolesUnsupportedReason", () => {
   it("refuses a runtime without the roles capability and names it", () => {
     const reason = rolesUnsupportedReason(input({ runtime: bareLike }));
     expect(reason).toBe(
-      'Runtime roles are not supported on the "bare" runtime yet. Deploy to a Docker server, or remove "roles" from openship.json.',
+      'Runtime roles are not supported on the "bare" runtime yet. Deploy to a Docker server. ' +
+        'To remove the roles, set "roles" to [] through the project API, SDK or CLI. ' +
+        'Also remove "roles" from openship.json if the repository declares them.',
     );
   });
 
@@ -138,11 +168,13 @@ function harness(
   over: {
     roles?: readonly StackRole[];
     previousRoles?: readonly StackRole[];
+    previous?: readonly RoleContainerRef[];
     findings?: StabilityFinding[];
     runtime?: Record<string, unknown>;
     previousRuntime?: Record<string, unknown>;
     keepProvisionedOnCancel?: () => boolean;
     stabilizationWindowMs?: number;
+    beforeStart?: () => Promise<void>;
   } = {},
 ): Harness {
   const logs: { message: string; level: string | undefined }[] = [];
@@ -167,12 +199,12 @@ function harness(
     ...over.previousRuntime,
   };
   const verifyStability = vi.fn(async () => over.findings ?? []);
-  const beforeStart = async () => {};
+  const beforeStart = over.beforeStart ?? (async () => {});
   const config = { deploymentId: "dep-1" } as unknown as DeployConfig;
   const deps = runtimeRoleRolloutDeps({
     roles: over.roles ?? [worker()],
     previousRoles: over.previousRoles,
-    previous: [],
+    previous: over.previous ?? [],
     runtime: asRuntime(runtime),
     previousRuntime: asRuntime(previousRuntime),
     config,
@@ -185,28 +217,47 @@ function harness(
   return { deps, runtime, previousRuntime, logs, logger, verifyStability, beforeStart, config };
 }
 
-const finding = (name: string, ok: boolean, detail: string): StabilityFinding =>
+const finding = (
+  containerId: string,
+  status: StabilityFinding["verdict"]["status"],
+  detail = status,
+): StabilityFinding =>
   ({
-    target: { serviceName: name, containerId: "c" },
-    verdict: { ok } as never,
+    target: { serviceName: containerId, containerId },
+    verdict: { status, ok: status === "stable" || status === "completed" } as never,
     summary: detail,
     detail,
   }) as StabilityFinding;
+/** One stable finding per ref: what a healthy rollout's stability watch returns. */
+const stable = (...refs: { containerId: string }[]) =>
+  refs.map((ref) => finding(ref.containerId, "stable"));
 
 describe("runtimeRoleRolloutDeps: startReplica", () => {
-  it("passes config, role, replica, logger.callback and the same beforeStart to deployRole", async () => {
-    const h = harness();
+  it("records the container before joining networks and starting its process", async () => {
+    const events: string[] = [];
+    const h = harness({
+      beforeStart: async () => {
+        events.push("networks");
+      },
+    });
     const role = worker("emails");
-    const id = await h.deps.startReplica(role, 2);
-    expect(id).toBe("new-id");
     const deployRole = h.runtime.deployRole as ReturnType<typeof vi.fn>;
+    deployRole.mockImplementation(async (...args: unknown[]) => {
+      await (args[4] as { beforeStart: (id: string) => Promise<void> }).beforeStart("new-id");
+      events.push("start");
+      return { containerId: "new-id" };
+    });
+    const id = await h.deps.startReplica(role, 2, async () => {
+      events.push("persist");
+    });
+    expect(id).toBe("new-id");
     expect(deployRole).toHaveBeenCalledTimes(1);
     const args = deployRole.mock.calls[0] as unknown[];
     expect(args[0]).toBe(h.config);
     expect(args[1]).toBe(role);
     expect(args[2]).toBe(2);
     expect(typeof args[3]).toBe("function");
-    expect((args[4] as { beforeStart: unknown }).beforeStart).toBe(h.beforeStart);
+    expect(events).toEqual(["persist", "networks", "start"]);
   });
 });
 
@@ -223,9 +274,9 @@ describe("runtimeRoleRolloutDeps: verify", () => {
       roles: [worker("worker", { health: { kind: "exec", command: "true" } })],
       runtime: { inContainerExecutor: vi.fn(async () => ({ exec })) },
       findings: [
-        finding("worker-1", true, "fine"),
-        finding("worker-2", false, "worker-2 crashed"),
-        finding("sched-1", false, "later"),
+        finding("c1", "stable"),
+        finding("c2", "exited", "worker-2 crashed"),
+        finding("c3", "exited", "later"),
       ],
     });
     expect(await h.deps.verify(refs)).toBe("worker-2 crashed");
@@ -267,6 +318,7 @@ describe("runtimeRoleRolloutDeps: verify", () => {
         scheduler("sched", { health: { kind: "process" } }),
       ],
       runtime: { inContainerExecutor },
+      findings: stable(...refs),
     });
     expect(await h.deps.verify(refs)).toBeNull();
     expect(inContainerExecutor).toHaveBeenCalledTimes(2);
@@ -286,6 +338,7 @@ describe("runtimeRoleRolloutDeps: verify", () => {
           },
         })),
       },
+      findings: stable(refs[1]!),
     });
     expect(await h.deps.verify([refs[1]!])).toBe(
       'Role "worker" replica 2 health command failed: exit 1',
@@ -296,6 +349,7 @@ describe("runtimeRoleRolloutDeps: verify", () => {
     const h = harness({
       roles: [worker("worker", { health: { kind: "exec", command: "check" } })],
       runtime: { inContainerExecutor: undefined },
+      findings: stable(refs[0]!),
     });
     expect(await h.deps.verify([refs[0]!])).toBeNull();
     expect(h.logs.some((l) => l.level === "warn" && l.message.includes('role "worker"'))).toBe(
@@ -306,9 +360,86 @@ describe("runtimeRoleRolloutDeps: verify", () => {
   it("returns null when stability and health both pass", async () => {
     const h = harness({
       roles: [worker("worker", { health: { kind: "exec", command: "ok" } })],
-      findings: [finding("worker-1", true, "fine")],
+      findings: stable(refs[0]!),
     });
     expect(await h.deps.verify([refs[0]!])).toBeNull();
+  });
+
+  describe("requires exactly one stable finding per requested container", () => {
+    const pair = refs.slice(0, 2);
+
+    it("passes with one distinct stable finding for each container", async () => {
+      const h = harness({ findings: stable(...pair) });
+      expect(await h.deps.verify(pair)).toBeNull();
+    });
+
+    it("fails a replica whose process completed: a role must keep running", async () => {
+      const h = harness({ findings: [finding("c1", "stable"), finding("c2", "completed")] });
+      expect(await h.deps.verify(pair)).toBe(
+        'Role "worker" replica 2 exited with code 0 during the startup check. A role is a long-running process, so it must keep running.',
+      );
+    });
+
+    it.each([
+      ["no finding for the second container", [finding("c1", "stable")], "2", "no result"],
+      [
+        "two findings for the first container and none for the second",
+        [finding("c1", "stable"), finding("c1", "stable")],
+        "1",
+        "2 results",
+      ],
+    ])("fails as unverified with %s", async (_label, findings, replica, count) => {
+      const h = harness({ findings });
+      expect(await h.deps.verify(pair)).toBe(
+        `Could not verify that role "worker" replica ${replica} started: the startup check returned ${count} for container c${replica}`,
+      );
+    });
+
+    it("reports a conclusive failure before an unverified replica", async () => {
+      const h = harness({ findings: [finding("c2", "exited", "worker-2 crashed")] });
+      expect(await h.deps.verify(pair)).toBe("worker-2 crashed");
+    });
+
+    it("fails a replica whose inspection throws, through the real stability watch", async () => {
+      // The shared watch logs the error and returns no finding for that replica.
+      const logs: { message: string; level?: string }[] = [];
+      const deps = runtimeRoleRolloutDeps({
+        roles: [worker()],
+        previous: [],
+        runtime: asRuntime({
+          name: "docker",
+          supports: (capability: string) => capability === "stabilityProbe",
+          sampleStability: vi.fn(async () => {
+            throw new Error("inspect failed");
+          }),
+        }),
+        previousRuntime: asRuntime({ name: "docker" }),
+        config: { deploymentId: "dep-1" } as unknown as DeployConfig,
+        logger: {
+          log: (message: string, level?: string) => logs.push({ message, level }),
+        } as unknown as BuildLogger,
+        beforeStart: async () => {},
+        stabilizationWindowMs: 5_000,
+        keepProvisionedOnCancel: () => false,
+      });
+      expect(await deps.verify([refs[0]!])).toBe(
+        'Could not verify that role "worker" replica 1 started: the startup check returned no result for container c1',
+      );
+      expect(logs.some((l) => l.level === "warn" && l.message.includes("inspect failed"))).toBe(
+        true,
+      );
+    });
+
+    it("never runs exec health when a replica is unverified", async () => {
+      const exec = vi.fn(async () => "");
+      const h = harness({
+        roles: [worker("worker", { health: { kind: "exec", command: "true" } })],
+        runtime: { inContainerExecutor: vi.fn(async () => ({ exec })) },
+        findings: [],
+      });
+      expect(await h.deps.verify(pair)).toMatch(/^Could not verify/);
+      expect(exec).not.toHaveBeenCalled();
+    });
   });
 });
 
@@ -342,6 +473,38 @@ describe("runtimeRoleRolloutDeps: stopPrevious", () => {
     const h = harness({ runtime: { stop: runtimeStop } });
     await h.deps.stopPrevious("old");
     expect(runtimeStop).not.toHaveBeenCalled();
+  });
+});
+
+describe("runtimeRoleRolloutDeps: singleton handover (#1253)", () => {
+  it("gives the rollout the previous roles, so a renamed scheduler stops before its replacement starts", async () => {
+    const events: string[] = [];
+    const h = harness({
+      roles: [scheduler("cron")],
+      previousRoles: [scheduler("scheduler")],
+      previous: [{ role: "scheduler", replica: 1, containerId: "old-sched" }],
+      runtime: {
+        deployRole: vi.fn(async (_config: unknown, role: StackRole) => {
+          events.push(`start ${role.name}`);
+          return { containerId: "new-cron" };
+        }),
+      },
+      previousRuntime: {
+        stop: vi.fn(async (id: string) => {
+          events.push(`stop ${id}`);
+        }),
+      },
+      findings: [
+        {
+          target: { serviceName: "cron-1", containerId: "new-cron" },
+          verdict: { status: "stable", ok: true, reason: "stayed up" },
+          summary: "stayed up",
+          detail: "stayed up",
+        },
+      ],
+    });
+    await rolloutRoles(h.deps);
+    expect(events).toEqual(["stop old-sched", "start cron"]);
   });
 });
 
@@ -493,7 +656,7 @@ describe("retirePreviousRoleContainers", () => {
     expect(t.withRuntime).not.toHaveBeenCalled();
   });
 
-  it("a failing destroy only warns and the rest still run", async () => {
+  it("a failing destroy names only the failed role in the deploy warning and the rest still run", async () => {
     const t = setup(async (id) => {
       if (id === "old-w1") throw new Error("rm failed");
     });
@@ -504,7 +667,10 @@ describe("retirePreviousRoleContainers", () => {
         log: t.log,
         withRuntime: t.withRuntime as never,
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe(
+      "Previous role container worker replica 1 (old-w1) could not be removed. " +
+        "It may still be running the previous release's code. Remove it manually.",
+    );
     expect(t.destroyed.sort()).toEqual(["old-sched", "old-w1", "old-w2"]);
     const warns = t.logs.filter((l) => l.level === "warn");
     expect(warns).toHaveLength(1);
@@ -522,7 +688,7 @@ describe("retirePreviousRoleContainers", () => {
         withRuntime: t.withRuntime as never,
       });
       await vi.advanceTimersByTimeAsync(40_000);
-      await expect(done).resolves.toBeUndefined();
+      await expect(done).resolves.toContain("worker replica 2 (old-w2)");
       const warns = t.logs.filter((l) => l.level === "warn");
       expect(warns).toHaveLength(1);
       expect(warns[0]!.message).toContain("timed out after 40000ms");
@@ -543,7 +709,11 @@ describe("retirePreviousRoleContainers", () => {
         log: t.log,
         withRuntime: withRuntime as never,
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe(
+      "3 previous role containers could not be removed: worker replica 1 (old-w1), " +
+        "worker replica 2 (old-w2), sched replica 1 (old-sched). " +
+        "They may still be running the previous release's code. Remove them manually.",
+    );
     const warns = t.logs.filter((l) => l.level === "warn");
     expect(warns).toHaveLength(1);
     expect(warns[0]!.message).toContain("host unreachable");
